@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlite_utils import Database
+from sqlite_utils.db import NotFoundError
 
 from eroasmr_scraper.config import settings
 from eroasmr_scraper.models import (
@@ -201,9 +202,9 @@ class VideoStorage:
         if not records:
             return 0
 
-        self.db["videos"].upsert_all(
+        self.db["videos"].insert_all(
             records,
-            pk="slug",
+            ignore=True,  # Ignore duplicates
             batch_size=settings.db.batch_size,
         )
         return len(records)
@@ -214,29 +215,77 @@ class VideoStorage:
         Args:
             video: VideoDetail object
         """
-        self.db["videos"].upsert(
-            {
-                "slug": video.slug,
-                "title": video.title,
-                "video_url": video.video_url,
-                "thumbnail_url": video.thumbnail_url,
-                "duration": video.duration,
-                "duration_seconds": video.duration_seconds,
-                "likes": video.likes,
-                "views": video.views,
-                "views_raw": video.views_raw,
-                "excerpt": video.excerpt,
-                "description": video.description,
-                "author": video.author,
-                "author_url": video.author_url,
-                "author_videos_count": video.author_videos_count,
-                "comment_count": video.comment_count,
-                "published_at": video.published_at,
-                "detail_scraped_at": video.detail_scraped_at.isoformat(),
-                "updated_at": datetime.now().isoformat(),
-            },
-            pk="slug",
-        )
+        # Check if video exists
+        if self.video_exists(video.slug):
+            # Update existing record
+            self.db.execute(
+                """
+                UPDATE videos SET
+                    title = ?,
+                    video_url = ?,
+                    thumbnail_url = ?,
+                    duration = ?,
+                    duration_seconds = ?,
+                    likes = ?,
+                    views = ?,
+                    views_raw = ?,
+                    excerpt = ?,
+                    description = ?,
+                    author = ?,
+                    author_url = ?,
+                    author_videos_count = ?,
+                    comment_count = ?,
+                    published_at = ?,
+                    detail_scraped_at = ?,
+                    updated_at = ?
+                WHERE slug = ?
+                """,
+                [
+                    video.title,
+                    video.video_url,
+                    video.thumbnail_url,
+                    video.duration,
+                    video.duration_seconds,
+                    video.likes,
+                    video.views,
+                    video.views_raw,
+                    video.excerpt,
+                    video.description,
+                    video.author,
+                    video.author_url,
+                    video.author_videos_count,
+                    video.comment_count,
+                    video.published_at,
+                    video.detail_scraped_at.isoformat(),
+                    datetime.now().isoformat(),
+                    video.slug,
+                ],
+            )
+        else:
+            # Insert new record
+            self.db["videos"].insert(
+                {
+                    "slug": video.slug,
+                    "title": video.title,
+                    "video_url": video.video_url,
+                    "thumbnail_url": video.thumbnail_url,
+                    "duration": video.duration,
+                    "duration_seconds": video.duration_seconds,
+                    "likes": video.likes,
+                    "views": video.views,
+                    "views_raw": video.views_raw,
+                    "excerpt": video.excerpt,
+                    "description": video.description,
+                    "author": video.author,
+                    "author_url": video.author_url,
+                    "author_videos_count": video.author_videos_count,
+                    "comment_count": video.comment_count,
+                    "published_at": video.published_at,
+                    "detail_scraped_at": video.detail_scraped_at.isoformat(),
+                    "scraped_at": video.scraped_at.isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                }
+            )
 
     def video_exists(self, slug: str) -> bool:
         """Check if video exists in database.
@@ -247,13 +296,8 @@ class VideoStorage:
         Returns:
             True if video exists
         """
-        try:
-            self.db["videos"].get(slug)
-            return True
-        except sqlite3.OperationalError:
-            return False
-        except KeyError:
-            return False
+        rows = list(self.db["videos"].rows_where("slug = ?", [slug], limit=1))
+        return len(rows) > 0
 
     def get_video_by_slug(self, slug: str) -> dict | None:
         """Get video by slug.
@@ -264,10 +308,8 @@ class VideoStorage:
         Returns:
             Video record or None
         """
-        try:
-            return dict(self.db["videos"].get(slug))
-        except (KeyError, sqlite3.OperationalError):
-            return None
+        rows = list(self.db["videos"].rows_where("slug = ?", [slug], limit=1))
+        return rows[0] if rows else None
 
     def get_video_id(self, slug: str) -> int | None:
         """Get video database ID by slug.
@@ -278,11 +320,8 @@ class VideoStorage:
         Returns:
             Video ID or None
         """
-        try:
-            row = self.db["videos"].get(slug)
-            return row["id"]
-        except (KeyError, sqlite3.OperationalError):
-            return None
+        rows = list(self.db["videos"].rows_where("slug = ?", [slug], select="id", limit=1))
+        return rows[0]["id"] if rows else None
 
     def get_videos_without_details(self, limit: int = 100) -> list[dict]:
         """Get videos that haven't had detail page scraped.
@@ -311,22 +350,20 @@ class VideoStorage:
         Returns:
             Tag ID
         """
-        self.db["tags"].upsert(
+        self.db["tags"].insert(
             {
                 "slug": tag.slug,
                 "name": tag.name,
                 "tag_url": tag.tag_url,
             },
-            pk="slug",
+            ignore=True,
         )
-        return self.db["tags"].get(tag.slug)["id"]
+        return self.get_tag_id(tag.slug) or 0
 
     def get_tag_id(self, slug: str) -> int | None:
         """Get tag ID by slug."""
-        try:
-            return self.db["tags"].get(slug)["id"]
-        except (KeyError, sqlite3.OperationalError):
-            return None
+        rows = list(self.db["tags"].rows_where("slug = ?", [slug], select="id", limit=1))
+        return rows[0]["id"] if rows else None
 
     # ============================================
     # Category operations
@@ -341,23 +378,21 @@ class VideoStorage:
         Returns:
             Category ID
         """
-        self.db["categories"].upsert(
+        self.db["categories"].insert(
             {
                 "slug": category.slug,
                 "name": category.name,
                 "category_url": category.category_url,
                 "video_count": category.video_count,
             },
-            pk="slug",
+            ignore=True,
         )
-        return self.db["categories"].get(category.slug)["id"]
+        return self.get_category_id(category.slug) or 0
 
     def get_category_id(self, slug: str) -> int | None:
         """Get category ID by slug."""
-        try:
-            return self.db["categories"].get(slug)["id"]
-        except (KeyError, sqlite3.OperationalError):
-            return None
+        rows = list(self.db["categories"].rows_where("slug = ?", [slug], select="id", limit=1))
+        return rows[0]["id"] if rows else None
 
     # ============================================
     # Relationship operations
