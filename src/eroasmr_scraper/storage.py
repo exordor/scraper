@@ -612,6 +612,7 @@ class VideoStorage:
         Returns:
             Dictionary mapping entity names to file paths
         """
+        import csv
         from pathlib import Path
 
         output_path = Path(output_dir)
@@ -619,34 +620,26 @@ class VideoStorage:
 
         files = {}
 
-        # Export videos
-        videos_file = output_path / "videos.csv"
-        self.db["videos"].to_csv(str(videos_file))
-        files["videos"] = str(videos_file)
+        def table_to_csv(table_name: str, filename: str) -> str:
+            """Export table to CSV file."""
+            filepath = output_path / filename
+            rows = list(self.db[table_name].rows)
+            if rows:
+                with open(filepath, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+                    writer.writeheader()
+                    writer.writerows(rows)
+            else:
+                # Create empty file with no headers
+                open(filepath, "w").close()
+            return str(filepath)
 
-        # Export tags
-        tags_file = output_path / "tags.csv"
-        self.db["tags"].to_csv(str(tags_file))
-        files["tags"] = str(tags_file)
-
-        # Export categories
-        categories_file = output_path / "categories.csv"
-        self.db["categories"].to_csv(str(categories_file))
-        files["categories"] = str(categories_file)
-
-        # Export video_tags relationships
-        video_tags_file = output_path / "video_tags.csv"
-        self.db["video_tags"].to_csv(str(video_tags_file))
-        files["video_tags"] = str(video_tags_file)
-
-        # Export video_categories relationships
-        video_categories_file = output_path / "video_categories.csv"
-        self.db["video_categories"].to_csv(str(video_categories_file))
-        files["video_categories"] = str(video_categories_file)
-
-        # Export video_related relationships
-        video_related_file = output_path / "video_related.csv"
-        self.db["video_related"].to_csv(str(video_related_file))
-        files["video_related"] = str(video_related_file)
+        # Export all tables
+        files["videos"] = table_to_csv("videos", "videos.csv")
+        files["tags"] = table_to_csv("tags", "tags.csv")
+        files["categories"] = table_to_csv("categories", "categories.csv")
+        files["video_tags"] = table_to_csv("video_tags", "video_tags.csv")
+        files["video_categories"] = table_to_csv("video_categories", "video_categories.csv")
+        files["video_related"] = table_to_csv("video_related", "video_related.csv")
 
         return files
