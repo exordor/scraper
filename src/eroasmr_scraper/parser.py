@@ -128,8 +128,10 @@ def parse_list_page(html: str, base_url: str = "https://eroasmr.com") -> list[Vi
         likes_text = likes_elem.get_text(strip=True) if likes_elem else "0"
         likes = int(re.search(r"\d+", likes_text).group()) if re.search(r"\d+", likes_text) else 0
 
-        # Views - found in entry-meta section
-        views_elem = article.select_one(".entry-meta .meta-item")
+        # Views - found in .post-views or .entry-meta
+        views_elem = article.select_one(".post-views")
+        if not views_elem:
+            views_elem = article.select_one(".entry-meta")
         views_raw = views_elem.get_text(strip=True) if views_elem else None
         views = parse_views(views_raw)
 
