@@ -390,7 +390,7 @@ def refresh_durations(
                         completed=update["page"],
                     )
                     console.print(
-                        f"  [cyan]~[/cyan] {update['videos_updated']}/{update['videos_checked']} updated"
+                        f"  [cyan]~[/cyan] {update['videos_processed']} videos processed"
                     )
 
                 elif update["type"] == "complete":
@@ -398,8 +398,7 @@ def refresh_durations(
                     console.print()
                     console.print(
                         f"[green]Duration refresh complete![/green] "
-                        f"Checked: {update['total_checked']}, "
-                        f"Updated: {update['total_updated']}"
+                        f"Total processed: {update['total_processed']}"
                     )
 
     asyncio.run(run())

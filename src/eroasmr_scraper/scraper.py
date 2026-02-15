@@ -658,8 +658,7 @@ class EroAsmrScraper:
                 end_page,
             )
 
-            total_checked = 0
-            total_updated = 0
+            total_processed = 0
 
             for page_num in range(start_page, end_page + 1):
                 await self._delay()
@@ -670,25 +669,21 @@ class EroAsmrScraper:
                     logger.warning("No videos found on page %d", page_num)
                     continue
 
-                # Update durations for existing videos
+                # Upsert videos with update_existing=True to update duration
                 video_objs = [Video(**v) for v in videos]
-                updated = self.storage.update_videos_duration(video_objs)
+                self.storage.upsert_videos(video_objs, update_existing=True)
 
-                total_checked += len(videos)
-                total_updated += updated
+                total_processed += len(videos)
 
                 yield {
                     "type": "page",
                     "page": page_num,
                     "total_pages": total_pages,
-                    "videos_checked": len(videos),
-                    "videos_updated": updated,
-                    "total_checked": total_checked,
-                    "total_updated": total_updated,
+                    "videos_processed": len(videos),
+                    "total_processed": total_processed,
                 }
 
             yield {
                 "type": "complete",
-                "total_checked": total_checked,
-                "total_updated": total_updated,
+                "total_processed": total_processed,
             }

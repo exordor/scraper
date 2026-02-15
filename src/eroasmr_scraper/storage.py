@@ -173,11 +173,12 @@ class VideoStorage:
     # Video operations
     # ============================================
 
-    def upsert_videos(self, videos: list[Video]) -> int:
+    def upsert_videos(self, videos: list[Video], update_existing: bool = False) -> int:
         """Insert or update videos in batch.
 
         Args:
             videos: List of Video objects
+            update_existing: If True, update existing records; if False, ignore duplicates
 
         Returns:
             Number of videos inserted/updated
@@ -202,11 +203,20 @@ class VideoStorage:
         if not records:
             return 0
 
-        self.db["videos"].insert_all(
-            records,
-            ignore=True,  # Ignore duplicates
-            batch_size=settings.db.batch_size,
-        )
+        if update_existing:
+            # Use upsert to update existing records
+            self.db["videos"].upsert_all(
+                records,
+                pk="slug",
+                batch_size=settings.db.batch_size,
+            )
+        else:
+            # Use insert with ignore for backward compatibility
+            self.db["videos"].insert_all(
+                records,
+                ignore=True,  # Ignore duplicates
+                batch_size=settings.db.batch_size,
+            )
         return len(records)
 
     def upsert_video_detail(self, video: VideoDetail) -> None:
