@@ -626,3 +626,69 @@ class EroAsmrScraper:
                 "retried": len(failed_urls),
                 "success": success_count,
             }
+
+    async def refresh_durations(
+        self,
+        start_page: int = 1,
+        end_page: int | None = None,
+    ) -> AsyncIterator[dict]:
+        """Refresh duration values for all existing videos.
+
+        Re-scrapes list pages and updates duration fields.
+
+        Args:
+            start_page: Starting page number
+            end_page: Ending page number (auto-detect if None)
+
+        Yields:
+            Progress updates
+        """
+        from eroasmr_scraper.models import Video
+
+        async with self._get_client() as client:
+            # Detect total pages
+            total_pages = await self.detect_total_pages(client)
+
+            if end_page is None:
+                end_page = total_pages
+
+            logger.info(
+                "Starting duration refresh: pages %d to %d",
+                start_page,
+                end_page,
+            )
+
+            total_checked = 0
+            total_updated = 0
+
+            for page_num in range(start_page, end_page + 1):
+                await self._delay()
+
+                videos = await self.scrape_list_page(client, page_num)
+
+                if not videos:
+                    logger.warning("No videos found on page %d", page_num)
+                    continue
+
+                # Update durations for existing videos
+                video_objs = [Video(**v) for v in videos]
+                updated = self.storage.update_videos_duration(video_objs)
+
+                total_checked += len(videos)
+                total_updated += updated
+
+                yield {
+                    "type": "page",
+                    "page": page_num,
+                    "total_pages": total_pages,
+                    "videos_checked": len(videos),
+                    "videos_updated": updated,
+                    "total_checked": total_checked,
+                    "total_updated": total_updated,
+                }
+
+            yield {
+                "type": "complete",
+                "total_checked": total_checked,
+                "total_updated": total_updated,
+            }

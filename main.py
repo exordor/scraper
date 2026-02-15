@@ -334,5 +334,76 @@ def clear_progress() -> None:
     console.print("[green]Progress cleared.[/green]")
 
 
+@app.command()
+def refresh_durations(
+    pages: Annotated[
+        str | None,
+        typer.Option("--pages", "-p", help="Page range (e.g., '1-10' or '5')"),
+    ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", help="Enable debug logging"),
+    ] = False,
+) -> None:
+    """Refresh duration values for all existing videos.
+
+    Re-scrapes list pages and updates duration fields in the database.
+    Useful when the parser has been fixed or updated.
+    """
+    setup_logging(verbose)
+
+    # Parse page range
+    start_page = 1
+    end_page = None
+
+    if pages:
+        if "-" in pages:
+            parts = pages.split("-")
+            start_page = int(parts[0])
+            end_page = int(parts[1]) if len(parts) > 1 else None
+        else:
+            start_page = int(pages)
+            end_page = start_page
+
+    scraper = EroAsmrScraper()
+
+    async def run() -> None:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Refreshing durations...", total=None)
+
+            async for update in scraper.refresh_durations(
+                start_page=start_page,
+                end_page=end_page,
+            ):
+                if update["type"] == "page":
+                    progress.update(
+                        task,
+                        description=f"Page {update['page']}/{update['total_pages']}",
+                        total=update["total_pages"],
+                        completed=update["page"],
+                    )
+                    console.print(
+                        f"  [cyan]~[/cyan] {update['videos_updated']}/{update['videos_checked']} updated"
+                    )
+
+                elif update["type"] == "complete":
+                    progress.update(task, description="Complete!")
+                    console.print()
+                    console.print(
+                        f"[green]Duration refresh complete![/green] "
+                        f"Checked: {update['total_checked']}, "
+                        f"Updated: {update['total_updated']}"
+                    )
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     app()

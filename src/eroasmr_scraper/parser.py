@@ -119,17 +119,17 @@ def parse_list_page(html: str, base_url: str = "https://eroasmr.com") -> list[Vi
         thumbnail_url = img_elem.get("src") or img_elem.get("data-src") if img_elem else None
 
         # Duration
-        duration_elem = article.select_one(".duration")
+        duration_elem = article.select_one(".video-duration")
         duration = duration_elem.get_text(strip=True) if duration_elem else None
         duration_seconds = parse_duration(duration)
 
         # Likes
-        likes_elem = article.select_one(".likes, .like, [class*='like']")
+        likes_elem = article.select_one(".video-like-counter")
         likes_text = likes_elem.get_text(strip=True) if likes_elem else "0"
         likes = int(re.search(r"\d+", likes_text).group()) if re.search(r"\d+", likes_text) else 0
 
-        # Views
-        views_elem = article.select_one(".views, .view, [class*='view']")
+        # Views - found in entry-meta section
+        views_elem = article.select_one(".entry-meta .meta-item")
         views_raw = views_elem.get_text(strip=True) if views_elem else None
         views = parse_views(views_raw)
 

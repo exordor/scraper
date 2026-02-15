@@ -337,6 +337,53 @@ class VideoStorage:
             .rows_where("detail_scraped_at IS NULL", limit=limit)
         )
 
+    def update_video_duration(
+        self, slug: str, duration: str | None, duration_seconds: int | None
+    ) -> bool:
+        """Update duration fields for an existing video.
+
+        Args:
+            slug: Video slug
+            duration: Duration string (e.g., "07:11")
+            duration_seconds: Duration in seconds
+
+        Returns:
+            True if updated, False if video not found
+        """
+        if not self.video_exists(slug):
+            return False
+
+        self.db.execute(
+            """
+            UPDATE videos SET
+                duration = ?,
+                duration_seconds = ?,
+                updated_at = ?
+            WHERE slug = ?
+            """,
+            [duration, duration_seconds, datetime.now().isoformat(), slug],
+        )
+        return True
+
+    def update_videos_duration(self, videos: list[Video]) -> int:
+        """Batch update duration for existing videos.
+
+        Args:
+            videos: List of Video objects with updated duration
+
+        Returns:
+            Number of videos updated
+        """
+        updated = 0
+        for v in videos:
+            if self.update_video_duration(v.slug, v.duration, v.duration_seconds):
+                updated += 1
+        return updated
+
+    def get_videos_count(self) -> int:
+        """Get total video count."""
+        return self.db["videos"].count
+
     # ============================================
     # Tag operations
     # ============================================
