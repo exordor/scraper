@@ -95,14 +95,14 @@ class TestParseListPage:
     """Tests for parse_list_page function."""
 
     def test_parse_single_video(self) -> None:
-        """Parse single video from HTML."""
+        """Parse single video from HTML with real website structure."""
         html = """
         <article>
             <h2><a href="https://eroasmr.com/video/test-video/">Test Video Title</a></h2>
             <img src="https://example.com/thumb.jpg" />
-            <span class="duration">10:30</span>
-            <span class="likes">50</span>
-            <span class="views">1.5K Views</span>
+            <span class="video-duration">10:30</span>
+            <span class="video-like-counter">50</span>
+            <span class="post-views">1.5K Views</span>
             <p class="excerpt">This is a test description</p>
         </article>
         """

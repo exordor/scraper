@@ -18,7 +18,7 @@ def parse_duration(duration_str: str | None) -> int | None:
     """Parse duration string to seconds.
 
     Args:
-        duration_str: Duration string like "07:11" or "1:23:45"
+        duration_str: Duration string like "07:11", "1:23:45", "29.19", or "11\"59"
 
     Returns:
         Duration in seconds, or None if parsing fails
@@ -26,7 +26,10 @@ def parse_duration(duration_str: str | None) -> int | None:
     if not duration_str:
         return None
 
-    parts = duration_str.strip().split(":")
+    # Normalize separators: replace . and " with :
+    normalized = duration_str.strip().replace(".", ":").replace('"', ":")
+
+    parts = normalized.split(":")
     if len(parts) == 2:
         minutes, seconds = parts
         try:

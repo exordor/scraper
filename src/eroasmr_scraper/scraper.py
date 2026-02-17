@@ -214,6 +214,15 @@ class EroAsmrScraper:
         videos = parse_list_page(html, self.settings.http.base_url)
         logger.info("Parsed %d videos from page %d", len(videos), page)
 
+        # Validate parsed data and log warnings for missing fields
+        for v in videos:
+            if v.duration is None:
+                logger.warning("Missing duration: %s", v.slug)
+            if v.duration_seconds is None:
+                logger.warning("Missing duration_seconds: %s", v.slug)
+            if v.views == 0:
+                logger.warning("Missing views: %s", v.slug)
+
         return [v.model_dump() for v in videos]
 
     async def scrape_detail_page(

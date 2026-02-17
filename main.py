@@ -282,6 +282,43 @@ def stats() -> None:
 
 
 @app.command()
+def verify() -> None:
+    """Verify database data integrity."""
+    storage = VideoStorage()
+
+    issues: list[str] = []
+
+    # Check for missing fields
+    total = storage.db["videos"].count
+
+    missing_duration = storage.db["videos"].count_where("duration IS NULL")
+    missing_duration_seconds = storage.db["videos"].count_where("duration_seconds IS NULL")
+    missing_views = storage.db["videos"].count_where("views = 0 OR views IS NULL")
+    missing_title = storage.db["videos"].count_where("title IS NULL OR title = ''")
+
+    if missing_duration > 0:
+        issues.append(f"Missing duration: {missing_duration}/{total} videos")
+    if missing_duration_seconds > 0:
+        issues.append(f"Missing duration_seconds: {missing_duration_seconds}/{total} videos")
+    if missing_views > 0:
+        issues.append(f"Missing views: {missing_views}/{total} videos")
+    if missing_title > 0:
+        issues.append(f"Missing title: {missing_title}/{total} videos")
+
+    # Show results
+    if issues:
+        console.print("[red]Data integrity issues found:[/red]\n")
+        for issue in issues:
+            console.print(f"  [red]✗[/red] {issue}")
+
+        console.print(f"\n[yellow]Run 'python main.py refresh-durations' to fix missing data[/yellow]")
+        raise typer.Exit(1)
+    else:
+        console.print("[green]✓ Data integrity check passed![/green]")
+        console.print(f"  All {total} videos have complete data.")
+
+
+@app.command()
 def export(
     format: Annotated[
         str,
