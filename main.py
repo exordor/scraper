@@ -187,19 +187,12 @@ def update(
                         description=f"Page {update['page']}: +{update['new_videos']} new",
                     )
 
-                elif update["type"] == "stopped":
-                    progress.update(task, description="Stopped")
-                    console.print()
-                    if update["reason"] == "found_existing":
-                        console.print(
-                            f"[yellow]Found existing video at page {update['page']}[/yellow]"
-                        )
-                    console.print(f"Total new videos: {update['total_new']}")
-                    return
-
                 elif update["type"] == "complete":
                     progress.update(task, description="Complete!")
                     console.print()
+                    stop_reason = update.get("stop_reason")
+                    if stop_reason == "found_existing":
+                        console.print("[yellow]Found existing video, stopped early[/yellow]")
                     console.print(
                         f"[green]Update complete![/green] "
                         f"New videos: {update['total_new']}, "

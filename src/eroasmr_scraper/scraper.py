@@ -469,6 +469,7 @@ class EroAsmrScraper:
             self.storage.save_progress(progress)
 
             total_new = 0
+            stop_reason: str | None = None
 
             for page_num in pages:
                 await self._delay()
@@ -479,55 +480,55 @@ class EroAsmrScraper:
                     continue
 
                 # Check for existing videos
+                # Process ALL videos on the page to handle cases where new videos
+                # might be interleaved with existing ones (e.g., pinned content)
                 new_videos = []
+                found_existing = False
                 for v in videos:
                     if self.storage.video_exists(v["slug"]):
-                        # Found existing video
-                        if not reverse:
-                            # In forward mode, stop here
-                            logger.info("Found existing video %s, stopping", v["slug"])
-                            yield {
-                                "type": "stopped",
-                                "reason": "found_existing",
-                                "page": page_num,
-                                "total_new": total_new,
-                            }
-                            return
+                        found_existing = True
+                        logger.debug("Found existing video %s", v["slug"])
                     else:
                         new_videos.append(v)
 
-                if not new_videos:
-                    # All videos on page exist
-                    if not reverse:
-                        yield {
-                            "type": "stopped",
-                            "reason": "all_exist",
-                            "page": page_num,
-                            "total_new": total_new,
-                        }
-                        return
-                    continue
+                # Save new videos if any were found
+                if new_videos:
+                    from eroasmr_scraper.models import Video
 
-                # Save new videos
-                from eroasmr_scraper.models import Video
+                    video_objs = [Video(**v) for v in new_videos]
+                    self.storage.upsert_videos(video_objs)
+                    total_new += len(new_videos)
 
-                video_objs = [Video(**v) for v in new_videos]
-                self.storage.upsert_videos(video_objs)
-                total_new += len(new_videos)
+                    # Update progress
+                    progress.last_page = page_num
+                    self.storage.save_progress(progress)
 
-                # Update progress
-                progress.last_page = page_num
-                self.storage.save_progress(progress)
+                    yield {
+                        "type": "page",
+                        "page": page_num,
+                        "new_videos": len(new_videos),
+                        "total_new": total_new,
+                    }
 
-                yield {
-                    "type": "page",
-                    "page": page_num,
-                    "new_videos": len(new_videos),
-                    "total_new": total_new,
-                }
+                # Stop if we found existing videos (we've reached old content)
+                # This handles the case where page 1 has both new and old videos
+                if found_existing and not reverse:
+                    logger.info(
+                        "Found existing videos, stopping after page %d (collected %d new)",
+                        page_num,
+                        len(new_videos),
+                    )
+                    stop_reason = "found_existing"
+                    break
 
-            # Phase 2: Detail pages for new videos
-            if with_details and total_new > 0:
+                # No existing videos means all content is new, continue to next page
+                if not new_videos and not reverse:
+                    # Edge case: page had no videos at all
+                    stop_reason = "all_exist"
+                    break
+
+            # Phase 2: Detail pages for videos without details
+            if with_details:
                 progress.phase = "detail"
                 self.storage.save_progress(progress)
 
@@ -572,12 +573,14 @@ class EroAsmrScraper:
                     "type": "complete",
                     "total_new": total_new,
                     "total_details": detail_count,
+                    "stop_reason": stop_reason,
                 }
             else:
                 yield {
                     "type": "complete",
                     "total_new": total_new,
                     "total_details": 0,
+                    "stop_reason": stop_reason,
                 }
 
     async def retry_failed(self) -> AsyncIterator[dict]:
