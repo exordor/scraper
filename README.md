@@ -108,6 +108,22 @@ eroasmr-scraper pipeline -o ./videos -n 5
 eroasmr-scraper pipeline --retry
 ```
 
+### Parallel Pipeline Commands
+
+```bash
+# Run parallel download-upload (recommended for large batches)
+eroasmr-scraper parallel
+
+# Process with limit
+eroasmr-scraper parallel --limit 100
+
+# Keep local files after upload
+eroasmr-scraper parallel --keep
+
+# Larger queue size for faster throughput
+eroasmr-scraper parallel --queue-size 20
+```
+
 ### Utility Commands
 
 ```bash
@@ -154,6 +170,17 @@ eroasmr-scraper --version
 | `--limit`, `-n` | Maximum number of videos to process |
 | `--retry` | Retry failed downloads |
 | `--keep`, `-k` | Keep local files after upload |
+| `--verbose`, `-v` | Enable debug logging |
+
+### `parallel` - Parallel Download-Upload Pipeline
+
+| Option | Description |
+|--------|-------------|
+| `--output`, `-o` | Output directory (default: data/downloads) |
+| `--limit`, `-n` | Maximum number of videos to process |
+| `--retry` | Retry failed downloads |
+| `--keep`, `-k` | Keep local files after upload |
+| `--queue-size` | Max items in download queue (default: 10) |
 | `--verbose`, `-v` | Enable debug logging |
 
 ### `export` - Export Data

@@ -34,7 +34,9 @@ class VideoStorage:
         """
         self.db_path = db_path or settings.db.path
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = Database(self.db_path)
+        # Use check_same_thread=False for thread-safe access in parallel pipeline
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.db = Database(conn)
         self._setup_tables()
 
     def _setup_tables(self) -> None:
