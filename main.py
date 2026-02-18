@@ -20,8 +20,10 @@ from rich.table import Table
 from eroasmr_scraper import __version__
 from eroasmr_scraper.config import settings
 from eroasmr_scraper.downloader import VideoDownloader
+from eroasmr_scraper.pipeline import DownloadUploadPipeline
 from eroasmr_scraper.scraper import EroAsmrScraper
 from eroasmr_scraper.storage import VideoStorage
+from eroasmr_scraper.uploader import MockUploader, Uploader
 
 app = typer.Typer(
     name="eroasmr-scraper",
@@ -557,6 +559,143 @@ def download_stats() -> None:
         progress_pct = stats["completed"] / stats["total_videos"] * 100
         console.print()
         console.print(f"Progress: {progress_pct:.1f}% complete")
+
+
+def _get_uploaders() -> list[Uploader]:
+    """Get list of configured uploaders.
+
+    Currently returns MockUploader for testing.
+    To add real uploaders, implement Uploader subclasses and add them here.
+
+    Example:
+        uploaders = []
+        if settings.telegram.bot_token:
+            uploaders.append(TelegramUploader(...))
+        if settings.gdrive.credentials_path:
+            uploaders.append(GoogleDriveUploader(...))
+        return uploaders
+    """
+    # For now, return mock uploader for testing
+    # Real uploaders will be added when credentials are configured
+    return [MockUploader()]
+
+
+@app.command()
+def pipeline(
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output directory for videos"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", "-n", help="Maximum number of videos to process"),
+    ] = None,
+    retry: Annotated[
+        bool,
+        typer.Option("--retry", help="Retry failed downloads"),
+    ] = False,
+    keep_files: Annotated[
+        bool,
+        typer.Option("--keep", "-k", help="Keep local files after upload"),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Enable debug logging"),
+    ] = False,
+) -> None:
+    """Download and upload videos in a pipeline.
+
+    Downloads videos and uploads them to all configured platforms.
+    By default, deletes local files after successful uploads.
+
+    Examples:
+        eroasmr-scraper pipeline                    # Process all pending
+        eroasmr-scraper pipeline --limit 10         # Process first 10
+        eroasmr-scraper pipeline --keep             # Keep local files
+        eroasmr-scraper pipeline -o ./videos -n 5   # Custom output, 5 videos
+    """
+    setup_logging(verbose)
+
+    output_dir = output or Path("data/downloads")
+    archive_file = Path("data/download_archive.txt")
+
+    storage = VideoStorage()
+    downloader = VideoDownloader(
+        storage=storage,
+        output_dir=output_dir,
+        archive_file=archive_file,
+    )
+
+    # Get configured uploaders
+    uploaders = _get_uploaders()
+
+    if not uploaders:
+        console.print("[yellow]No uploaders configured. Using mock uploader for testing.[/yellow]")
+        console.print("To add real uploaders, implement Uploader subclasses.")
+
+    # Create pipeline
+    pipeline_instance = DownloadUploadPipeline(
+        storage=storage,
+        downloader=downloader,
+        uploaders=uploaders,
+        delete_after_upload=not keep_files,
+    )
+
+    # Show configuration
+    console.print(f"[cyan]Output directory:[/cyan] {output_dir}")
+    console.print(f"[cyan]Uploaders:[/cyan] {', '.join(u.storage_type for u in uploaders)}")
+    console.print(f"[cyan]Delete after upload:[/cyan] {not keep_files}")
+    console.print()
+
+    # Check uploader status
+    status = pipeline_instance.get_uploader_status()
+    for storage_type, ready in status.items():
+        icon = "[green]✓[/green]" if ready else "[red]✗[/red]"
+        console.print(f"  {icon} {storage_type}: {'ready' if ready else 'not configured'}")
+
+    console.print()
+
+    # Run pipeline
+    stats = pipeline_instance.process_all(limit=limit, retry_failed=retry)
+
+    # Show summary
+    console.print()
+    console.print("[green]Pipeline complete![/green]")
+    console.print(f"  Downloaded: {stats['downloaded']}")
+    console.print(f"  Upload success: {stats['upload_success']}")
+    console.print(f"  Upload partial: {stats['upload_partial']}")
+    console.print(f"  Upload failed: {stats['upload_failed']}")
+    console.print(f"  Download failed: {stats['download_failed']}")
+
+
+@app.command()
+def uploaders() -> None:
+    """Show status of configured uploaders."""
+    uploaders_list = _get_uploaders()
+
+    table = Table(title="Uploader Status")
+    table.add_column("Storage Type", style="cyan")
+    table.add_column("Status", style="green")
+    table.add_column("Description")
+
+    for uploader in uploaders_list:
+        ready = uploader.is_ready()
+        status = "[green]Ready[/green]" if ready else "[red]Not Configured[/red]"
+        desc = uploader.__class__.__name__
+        table.add_row(uploader.storage_type, status, desc)
+
+    # Add placeholder for future uploaders
+    future_uploaders = [
+        ("telegram", "TelegramUploader", "Upload to Telegram channel"),
+        ("google_drive", "GoogleDriveUploader", "Upload to Google Drive"),
+    ]
+
+    for storage_type, class_name, desc in future_uploaders:
+        table.add_row(storage_type, "[dim]Not implemented[/dim]", f"[dim]{class_name}: {desc}[/dim]")
+
+    console.print(table)
+    console.print()
+    console.print("[dim]To add uploaders, implement Uploader subclasses in src/eroasmr_scraper/[/dim]")
 
 
 if __name__ == "__main__":
