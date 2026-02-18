@@ -1,9 +1,19 @@
 """Pydantic data models for video metadata."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class DownloadStatus(str, Enum):
+    """Download status for videos."""
+
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class Video(BaseModel):
@@ -104,3 +114,25 @@ class FailedUrl(BaseModel):
     error: str | None = None
     retry_count: int = 0
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+class VideoDownload(BaseModel):
+    """Download record for tracking video download status."""
+
+    slug: str  # PK, references videos.slug
+    status: DownloadStatus = DownloadStatus.PENDING
+    local_path: str | None = None  # Relative path (e.g., "downloads/abc123.mp4")
+    file_size: int | None = None  # Bytes
+    error_message: str | None = None
+    downloaded_at: datetime | None = None
+
+
+class StorageLocation(BaseModel):
+    """Network storage location for uploaded videos (future extension)."""
+
+    slug: str  # References videos.slug
+    storage_type: str  # "telegram" | "google_drive" | ...
+    location_id: str  # Platform-specific unique identifier
+    location_url: str | None = None  # Accessible URL
+    metadata: dict[str, Any] | None = None  # Additional info (JSON)
+    uploaded_at: datetime = Field(default_factory=datetime.now)

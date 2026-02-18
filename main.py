@@ -19,6 +19,7 @@ from rich.table import Table
 
 from eroasmr_scraper import __version__
 from eroasmr_scraper.config import settings
+from eroasmr_scraper.downloader import VideoDownloader
 from eroasmr_scraper.scraper import EroAsmrScraper
 from eroasmr_scraper.storage import VideoStorage
 
@@ -432,6 +433,130 @@ def refresh_durations(
                     )
 
     asyncio.run(run())
+
+
+@app.command()
+def download(
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output directory for videos"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", "-n", help="Maximum number of videos to download"),
+    ] = None,
+    retry: Annotated[
+        bool,
+        typer.Option("--retry", help="Retry failed downloads"),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Enable debug logging"),
+    ] = False,
+) -> None:
+    """Download videos from scraped data.
+
+    Downloads all pending videos (not yet downloaded) to the output directory.
+    Use --retry to retry previously failed downloads.
+
+    Examples:
+        eroasmr-scraper download                    # Download all pending
+        eroasmr-scraper download --limit 10         # Download first 10
+        eroasmr-scraper download --retry            # Retry failed downloads
+        eroasmr-scraper download -o ./my_videos     # Custom output directory
+    """
+    setup_logging(verbose)
+
+    # Set output directory
+    output_dir = output or Path("data/downloads")
+    archive_file = Path("data/download_archive.txt")
+
+    storage = VideoStorage()
+    downloader = VideoDownloader(
+        storage=storage,
+        output_dir=output_dir,
+        archive_file=archive_file,
+    )
+
+    console.print(f"[cyan]Output directory:[/cyan] {output_dir}")
+    console.print(f"[cyan]Archive file:[/cyan] {archive_file}")
+
+    # Get pending count
+    pending = storage.get_pending_downloads(limit=limit, include_failed=retry)
+    total_pending = len(pending)
+
+    if total_pending == 0:
+        console.print("[yellow]No pending downloads.[/yellow]")
+        if not retry:
+            console.print("Use --retry to retry failed downloads.")
+        return
+
+    console.print(f"[cyan]Pending downloads:[/cyan] {total_pending}")
+    console.print()
+
+    # Run download
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Downloading...", total=total_pending)
+
+        completed = 0
+        failed = 0
+
+        for i, slug in enumerate(pending, 1):
+            progress.update(
+                task,
+                description=f"Downloading {slug}...",
+                completed=i - 1,
+            )
+
+            success, error = downloader.download_video(slug)
+
+            if success:
+                completed += 1
+                console.print(f"  [green]✓[/green] {slug}")
+            else:
+                failed += 1
+                console.print(f"  [red]✗[/red] {slug}: {error}")
+
+        progress.update(task, completed=total_pending, description="Complete!")
+
+    console.print()
+    console.print(
+        f"[green]Download complete![/green] "
+        f"Completed: {completed}, Failed: {failed}"
+    )
+
+
+@app.command()
+def download_stats() -> None:
+    """Show download statistics."""
+    storage = VideoStorage()
+    stats = storage.get_download_stats()
+
+    table = Table(title="Download Statistics")
+    table.add_column("Status", style="cyan")
+    table.add_column("Count", justify="right", style="green")
+
+    table.add_row("Total Videos", str(stats["total_videos"]))
+    table.add_row("Not Started", str(stats["not_started"]))
+    table.add_row("Pending", str(stats["pending"]))
+    table.add_row("Downloading", str(stats["downloading"]))
+    table.add_row("Completed", str(stats["completed"]))
+    table.add_row("Failed", str(stats["failed"]))
+
+    console.print(table)
+
+    # Show progress percentage
+    if stats["total_videos"] > 0:
+        progress_pct = stats["completed"] / stats["total_videos"] * 100
+        console.print()
+        console.print(f"Progress: {progress_pct:.1f}% complete")
 
 
 if __name__ == "__main__":

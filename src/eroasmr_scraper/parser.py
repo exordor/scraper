@@ -344,3 +344,41 @@ def is_404_page(html: str) -> bool:
         return True
 
     return False
+
+
+def parse_video_source(html: str) -> str | None:
+    """Parse video source URL from detail page.
+
+    Args:
+        html: HTML content of video detail page
+
+    Returns:
+        Video source URL or None if not found
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    # Try video > source first
+    video = soup.select_one("video")
+    if video:
+        # Check video src attribute
+        src = video.get("src")
+        if src:
+            return src
+
+        # Check source tags
+        source = video.select_one("source")
+        if source:
+            return source.get("src")
+
+    # Try to find in script tags (some sites embed URL in JS)
+    import re
+
+    scripts = soup.select("script")
+    for script in scripts:
+        text = script.string or ""
+        # Look for common video URL patterns
+        matches = re.findall(r'(https?://[^\s"\'<>]+\.(?:mp4|m3u8|webm))', text)
+        if matches:
+            return matches[0]
+
+    return None

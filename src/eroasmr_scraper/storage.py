@@ -11,12 +11,15 @@ from sqlite_utils.db import NotFoundError
 from eroasmr_scraper.config import settings
 from eroasmr_scraper.models import (
     Category,
+    DownloadStatus,
     FailedUrl,
     RelatedVideo,
     ScrapeProgress,
+    StorageLocation,
     Tag,
     Video,
     VideoDetail,
+    VideoDownload,
 )
 
 
@@ -164,6 +167,42 @@ class VideoStorage:
             },
             pk="id",
             if_not_exists=True,
+        )
+
+        # Downloads table - track video download status
+        self.db["downloads"].create(
+            columns={
+                "slug": str,
+                "status": str,
+                "local_path": str,
+                "file_size": int,
+                "error_message": str,
+                "downloaded_at": str,
+            },
+            pk="slug",
+            not_null={"slug", "status"},
+            if_not_exists=True,
+        )
+        self.db["downloads"].create_index(["status"], if_not_exists=True)
+
+        # Storage locations table - track uploaded locations (future extension)
+        self.db["storage_locations"].create(
+            columns={
+                "id": int,
+                "slug": str,
+                "storage_type": str,
+                "location_id": str,
+                "location_url": str,
+                "metadata": str,  # JSON
+                "uploaded_at": str,
+            },
+            pk="id",
+            not_null={"slug", "storage_type", "location_id"},
+            if_not_exists=True,
+        )
+        self.db["storage_locations"].create_index(["slug"], if_not_exists=True)
+        self.db["storage_locations"].create_index(
+            ["slug", "storage_type"], unique=True, if_not_exists=True
         )
 
         # Enable foreign keys
@@ -700,3 +739,163 @@ class VideoStorage:
         files["video_related"] = table_to_csv("video_related", "video_related.csv")
 
         return files
+
+    # ============================================
+    # Download operations
+    # ============================================
+
+    def get_pending_downloads(
+        self, limit: int | None = None, include_failed: bool = False
+    ) -> list[str]:
+        """Get slugs of videos pending download.
+
+        Args:
+            limit: Maximum number to return
+            include_failed: If True, also include failed downloads for retry
+
+        Returns:
+            List of video slugs
+        """
+        # Get all video slugs
+        all_slugs = [row["slug"] for row in self.db["videos"].rows]
+
+        # Get already downloaded slugs
+        if include_failed:
+            downloaded_slugs = set(
+                row["slug"]
+                for row in self.db["downloads"].rows_where(
+                    "status IN ('completed', 'downloading')"
+                )
+            )
+        else:
+            downloaded_slugs = set(row["slug"] for row in self.db["downloads"].rows)
+
+        # Filter and limit
+        pending = [s for s in all_slugs if s not in downloaded_slugs]
+        if limit:
+            pending = pending[:limit]
+        return pending
+
+    def get_download_record(self, slug: str) -> dict | None:
+        """Get download record by slug.
+
+        Args:
+            slug: Video slug
+
+        Returns:
+            Download record or None
+        """
+        rows = list(self.db["downloads"].rows_where("slug = ?", [slug], limit=1))
+        return rows[0] if rows else None
+
+    def init_download(self, slug: str) -> None:
+        """Initialize a download record (if not exists).
+
+        Args:
+            slug: Video slug
+        """
+        self.db["downloads"].upsert(
+            {
+                "slug": slug,
+                "status": DownloadStatus.PENDING.value,
+            },
+            pk="slug",
+        )
+
+    def update_download_status(
+        self,
+        slug: str,
+        status: DownloadStatus,
+        local_path: str | None = None,
+        file_size: int | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        """Update download status.
+
+        Args:
+            slug: Video slug
+            status: New status
+            local_path: Local file path (on completion)
+            file_size: File size in bytes (on completion)
+            error_message: Error message (on failure)
+        """
+        record: dict[str, Any] = {
+            "slug": slug,
+            "status": status.value,
+        }
+
+        if status == DownloadStatus.COMPLETED:
+            record["local_path"] = local_path
+            record["file_size"] = file_size
+            record["downloaded_at"] = datetime.now().isoformat()
+        elif status == DownloadStatus.FAILED:
+            record["error_message"] = error_message
+
+        # Use insert with replace=True instead of upsert for reliability
+        self.db["downloads"].insert(record, pk="slug", replace=True)
+
+    def mark_downloading(self, slug: str) -> None:
+        """Mark download as in progress."""
+        self.update_download_status(slug, DownloadStatus.DOWNLOADING)
+
+    def mark_completed(self, slug: str, local_path: str, file_size: int) -> None:
+        """Mark download as completed."""
+        self.update_download_status(
+            slug, DownloadStatus.COMPLETED, local_path, file_size
+        )
+
+    def mark_failed(self, slug: str, error_message: str) -> None:
+        """Mark download as failed."""
+        self.update_download_status(slug, DownloadStatus.FAILED, error_message=error_message)
+
+    def get_download_stats(self) -> dict[str, int]:
+        """Get download statistics.
+
+        Returns:
+            Dictionary with counts by status
+        """
+        stats = {
+            "total_videos": self.db["videos"].count,
+            "pending": self.db["downloads"].count_where("status = 'pending'"),
+            "downloading": self.db["downloads"].count_where("status = 'downloading'"),
+            "completed": self.db["downloads"].count_where("status = 'completed'"),
+            "failed": self.db["downloads"].count_where("status = 'failed'"),
+        }
+        stats["not_started"] = stats["total_videos"] - sum(
+            [stats["pending"], stats["downloading"], stats["completed"], stats["failed"]]
+        )
+        return stats
+
+    # ============================================
+    # Storage location operations (future extension)
+    # ============================================
+
+    def add_storage_location(self, location: StorageLocation) -> None:
+        """Add a storage location record.
+
+        Args:
+            location: StorageLocation object
+        """
+        import json
+
+        self.db["storage_locations"].insert(
+            {
+                "slug": location.slug,
+                "storage_type": location.storage_type,
+                "location_id": location.location_id,
+                "location_url": location.location_url,
+                "metadata": json.dumps(location.metadata) if location.metadata else None,
+                "uploaded_at": location.uploaded_at.isoformat(),
+            }
+        )
+
+    def get_storage_locations(self, slug: str) -> list[dict]:
+        """Get all storage locations for a video.
+
+        Args:
+            slug: Video slug
+
+        Returns:
+            List of storage location records
+        """
+        return list(self.db["storage_locations"].rows_where("slug = ?", [slug]))
