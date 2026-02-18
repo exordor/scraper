@@ -561,6 +561,64 @@ def download_stats() -> None:
         console.print(f"Progress: {progress_pct:.1f}% complete")
 
 
+@app.command()
+def reset_downloads(
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation"),
+    ] = False,
+) -> None:
+    """Reset download status (clear downloads table and archive).
+
+    Useful when:
+    - Moving to a new server and need to re-download videos
+    - Downloaded files were deleted and need to be re-downloaded
+    - Want to start fresh with downloads
+
+    This will:
+    - Delete all records from downloads table
+    - Delete all records from storage_locations table
+    - Clear the download_archive.txt file
+
+    Videos metadata (videos table) will NOT be affected.
+    """
+    storage = VideoStorage()
+    archive_file = Path("data/download_archive.txt")
+
+    # Get current stats
+    download_count = storage.db["downloads"].count
+    storage_count = storage.db["storage_locations"].count
+    video_count = storage.db["videos"].count
+
+    console.print(f"[cyan]Videos in database:[/cyan] {video_count}")
+    console.print(f"[cyan]Download records:[/cyan] {download_count}")
+    console.print(f"[cyan]Storage locations:[/cyan] {storage_count}")
+    console.print()
+
+    if not yes:
+        confirm = typer.confirm(
+            "This will reset all download status. Continue?",
+            default=False,
+        )
+        if not confirm:
+            console.print("[yellow]Cancelled.[/yellow]")
+            raise typer.Exit()
+
+    # Clear downloads table (use raw SQL to ensure commit)
+    with storage.db.conn:
+        storage.db.conn.execute("DELETE FROM downloads")
+        storage.db.conn.execute("DELETE FROM storage_locations")
+    console.print("[green]✓[/green] Cleared downloads and storage_locations tables")
+
+    # Clear archive file
+    if archive_file.exists():
+        archive_file.unlink()
+        console.print("[green]✓[/green] Deleted download archive file")
+
+    console.print()
+    console.print("[green]Reset complete![/green] Run 'download' or 'pipeline' to start downloading.")
+
+
 def _get_uploaders() -> list[Uploader]:
     """Get list of configured uploaders.
 
