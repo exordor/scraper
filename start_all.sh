@@ -17,6 +17,10 @@ START_DASHBOARD=true
 DASHBOARD_PORT=8080
 BATCH_SIZE=5
 
+# Paths - download to telegram upload service's data directory for sharing
+UPLOAD_SERVICE_DATA="/root/telegram-upload-service/data"
+DOWNLOAD_DIR="$UPLOAD_SERVICE_DATA/downloads"
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -77,7 +81,7 @@ echo ""
 # Export environment variables
 export EROASMR_TELEGRAM__TENANT_ID="${EROASMR_TELEGRAM__TENANT_ID:-4d6e8863-4d30-4e65-9455-92b49d21b67c}"
 export EROASMR_TELEGRAM__UPLOAD_SERVICE_URL="${EROASMR_TELEGRAM__UPLOAD_SERVICE_URL:-http://localhost:8000}"
-export EROASMR_TELEGRAM__FILE_PATH_MAP="${EROASMR_TELEGRAM__FILE_PATH_MAP:-{\"data/downloads\": \"/app/data/downloads\"}}"
+export EROASMR_TELEGRAM__FILE_PATH_MAP="${EROASMR_TELEGRAM__FILE_PATH_MAP:-{\"$UPLOAD_SERVICE_DATA\": \"/app/data\"}}"
 
 echo "Configuration:"
 echo "  Tenant ID: $EROASMR_TELEGRAM__TENANT_ID"
@@ -103,10 +107,14 @@ fi
 
 # Start pipeline
 if [[ "$START_PIPELINE" == "true" ]]; then
+    # Ensure download directory exists
+    mkdir -p "$DOWNLOAD_DIR"
+
     echo ""
     echo "Starting continuous pipeline (batch size: $BATCH_SIZE)..."
+    echo "  Download directory: $DOWNLOAD_DIR"
     tmux new-session -d -s eroasmr-pipeline -c "$SCRIPT_DIR" \
-        "bash $SCRIPT_DIR/run_continuous.sh --parallel --batch-size $BATCH_SIZE; exec bash"
+        "bash $SCRIPT_DIR/run_continuous.sh --parallel --batch-size $BATCH_SIZE --output $DOWNLOAD_DIR; exec bash"
     echo "  Session: eroasmr-pipeline"
 fi
 

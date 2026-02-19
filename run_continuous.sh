@@ -24,6 +24,7 @@ MIN_DISK_FREE="${MIN_DISK_FREE:-15}"    # Minimum % free disk space
 WAIT_LOW_DISK="${WAIT_LOW_DISK:-600}"   # Wait seconds when disk is low
 WAIT_BETWEEN_BATCHES="${WAIT_BETWEEN_BATCHES:-60}"  # Wait between batches
 MAX_RETRIES="${MAX_RETRIES:-3}"         # Max retries per batch
+OUTPUT_DIR=""                            # Output directory for downloads
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -36,12 +37,17 @@ while [[ $# -gt 0 ]]; do
             MIN_DISK_FREE="$2"
             shift 2
             ;;
+        --output|-o)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --batch-size N, -b N    Process N videos per batch (default: 5)"
             echo "  --min-disk-free P, -d P Pause when disk free < P% (default: 15)"
+            echo "  --output DIR, -o DIR    Output directory for downloads"
             echo "  --help, -h              Show this help message"
             echo ""
             echo "Environment variables:"
@@ -101,8 +107,11 @@ run_batch() {
 
     cd "$SCRIPT_DIR"
 
-    # Run the parallel pipeline with limit
-    local cmd="uv run python main.py parallel --limit $BATCH_SIZE -v"
+    # Build command with optional output directory
+    local cmd="uv run python main.py pipeline --limit $BATCH_SIZE -v"
+    if [[ -n "$OUTPUT_DIR" ]]; then
+        cmd="$cmd --output $OUTPUT_DIR"
+    fi
     log "Running: $cmd"
 
     if eval "$cmd" 2>&1 | tee -a "$LOG_FILE"; then

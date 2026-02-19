@@ -45,7 +45,7 @@ class TelegramConfig(BaseModel):
 
     upload_service_url: str = "http://localhost:8000"
     tenant_id: str | None = None
-    caption_template: str = "{title}"  # Supported variables: {title}, {slug}, {duration}
+    caption_template: str = "<b>{title}</b>\n\n{description}\n\n#{slug}"  # Variables: {title}, {slug}, {description}, {duration}
     parse_mode: str = "HTML"
     # Path mapping for Docker integration: local_path -> container_path
     # Example: {"data/downloads": "/app/data/downloads"}

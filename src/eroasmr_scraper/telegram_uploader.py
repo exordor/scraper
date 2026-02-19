@@ -76,12 +76,20 @@ class TelegramUploader(Uploader):
         """
         caption = self.caption_template
 
-        if self.storage and ("{title}" in caption or "{duration}" in caption):
+        # Always replace slug
+        caption = caption.replace("{slug}", slug)
+
+        if self.storage:
             video = self.storage.get_video_by_slug(slug)
             if video:
                 caption = caption.replace("{title}", video.get("title", slug))
-                caption = caption.replace("{slug}", slug)
                 caption = caption.replace("{duration}", video.get("duration") or "")
+                # Handle description - use excerpt if description is empty
+                description = video.get("description") or video.get("excerpt") or ""
+                # Truncate description if too long (Telegram limit is 1024 chars for captions)
+                if len(description) > 800:
+                    description = description[:797] + "..."
+                caption = caption.replace("{description}", description)
 
         return caption
 
