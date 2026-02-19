@@ -23,6 +23,7 @@ from eroasmr_scraper.downloader import VideoDownloader
 from eroasmr_scraper.parallel_pipeline import ParallelPipeline
 from eroasmr_scraper.pipeline import DownloadUploadPipeline
 from eroasmr_scraper.scraper import EroAsmrScraper
+from eroasmr_scraper.sites.zhumianwang.scraper import ZhumianwangScraper
 from eroasmr_scraper.storage import VideoStorage
 from eroasmr_scraper.telegram_uploader import TelegramUploader
 from eroasmr_scraper.uploader import MockUploader, Uploader
@@ -105,6 +106,10 @@ def full(
         bool,
         typer.Option("--no-details", help="Skip detail page scraping"),
     ] = False,
+    with_downloads: Annotated[
+        bool,
+        typer.Option("--with-downloads", help="Scrape download links (zhumianwang only, requires auth)"),
+    ] = False,
     site: SiteChoice = "eroasmr",  # type: ignore
     verbose: Annotated[
         bool,
@@ -115,6 +120,7 @@ def full(
 
     Use --reverse to scrape from oldest to newest (starts from last page).
     Use --site to specify the site (eroasmr, zhumianwang).
+    Use --with-downloads to scrape download links (zhumianwang only, requires login cookies).
     """
     setup_logging(verbose)
 
@@ -135,10 +141,7 @@ def full(
     storage = VideoStorage(site_id=site)
 
     if site == "zhumianwang":
-        # Import zhumianwang scraper when available
-        console.print("[yellow]Note: zhumianwang scraper implementation pending[/yellow]")
-        console.print("The parser has been created but the scraper class needs to be implemented.")
-        raise typer.Exit(1)
+        scraper = ZhumianwangScraper(storage=storage)
     else:
         scraper = EroAsmrScraper(storage=storage)
 
@@ -153,12 +156,18 @@ def full(
         ) as progress:
             task = progress.add_task("Scraping...", total=None)
 
-            async for update in scraper.scrape_full(
-                start_page=start_page,
-                end_page=end_page,
-                reverse=reverse,
-                with_details=not no_details,
-            ):
+            # Build kwargs for scrape_full
+            scrape_kwargs = {
+                "start_page": start_page,
+                "end_page": end_page,
+                "reverse": reverse,
+                "with_details": not no_details,
+            }
+            # Only pass with_downloads for zhumianwang
+            if site == "zhumianwang" and with_downloads:
+                scrape_kwargs["with_downloads"] = True
+
+            async for update in scraper.scrape_full(**scrape_kwargs):
                 if update["type"] == "page":
                     progress.update(
                         task,
@@ -177,6 +186,14 @@ def full(
                         description=f"Details: {update['details_scraped']}/{update['total_details']}",
                         total=update["total_details"],
                         completed=update["details_scraped"],
+                    )
+
+                elif update["type"] == "download_progress":
+                    progress.update(
+                        task,
+                        description=f"Downloads: {update['downloads_scraped']}/{update['total_downloads']}",
+                        total=update["total_downloads"],
+                        completed=update["downloads_scraped"],
                     )
 
                 elif update["type"] == "complete":

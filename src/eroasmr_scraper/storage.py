@@ -54,16 +54,28 @@ class VideoStorage:
                 "thumbnail_url": str,
                 "duration": str,
                 "duration_seconds": int,
+                # Eroasmr-specific fields
                 "likes": int,
                 "views": int,
                 "views_raw": str,
                 "excerpt": str,
-                "description": str,
-                "author": str,
                 "author_url": str,
                 "author_videos_count": int,
                 "comment_count": int,
+                # Shared fields
+                "description": str,
+                "author": str,
                 "published_at": str,
+                # Zhumianwang-specific fields
+                "published_date": str,
+                "member_status": str,
+                "region": str,
+                "year": int,
+                "update_time": str,
+                "play_url": str,
+                "download_url": str,
+                "audio_download_url": str,
+                # Timestamps
                 "created_at": str,
                 "updated_at": str,
                 "scraped_at": str,
@@ -222,11 +234,14 @@ class VideoStorage:
     # Video operations
     # ============================================
 
-    def upsert_videos(self, videos: list[Video], update_existing: bool = True) -> int:
+    def upsert_videos(self, videos: list[Any], update_existing: bool = True) -> int:
         """Insert or update videos in batch.
 
+        Supports both eroasmr and zhumianwang Video models.
+        Uses model_dump() to handle different field sets.
+
         Args:
-            videos: List of Video objects
+            videos: List of Video objects (any site-specific model)
             update_existing: If True, update existing records; if False, ignore duplicates
 
         Returns:
@@ -234,23 +249,44 @@ class VideoStorage:
         """
         records = []
         for v in videos:
+            # Use model_dump() to get all fields from the video object
+            data = v.model_dump()
+
             # Get site_id from video if available, otherwise use storage's site_id
-            video_site_id = getattr(v, 'site_id', self.site_id)
-            records.append({
-                "slug": v.slug,
+            video_site_id = data.get('site_id', self.site_id)
+
+            # Build record with standard fields + any extra fields from the model
+            record = {
+                "slug": data.get("slug"),
                 "site_id": video_site_id,
-                "title": v.title,
-                "video_url": v.video_url,
-                "thumbnail_url": v.thumbnail_url,
-                "duration": v.duration,
-                "duration_seconds": v.duration_seconds,
-                "likes": v.likes,
-                "views": v.views,
-                "views_raw": v.views_raw,
-                "excerpt": v.excerpt,
-                "scraped_at": v.scraped_at.isoformat(),
+                "title": data.get("title"),
+                "video_url": data.get("video_url"),
+                "thumbnail_url": data.get("thumbnail_url"),
+                "duration": data.get("duration"),
+                "duration_seconds": data.get("duration_seconds"),
+                # Optional eroasmr fields (may not exist in all models)
+                "likes": data.get("likes"),
+                "views": data.get("views", 0),
+                "views_raw": data.get("views_raw"),
+                "excerpt": data.get("excerpt"),
+                # Optional zhumianwang fields
+                "author": data.get("author"),
+                "published_date": data.get("published_date"),
+                "member_status": data.get("member_status"),
+                # Timestamps
+                "scraped_at": data.get("scraped_at"),
                 "updated_at": datetime.now().isoformat(),
-            })
+            }
+
+            # Convert datetime objects to ISO format
+            if hasattr(v, 'scraped_at') and v.scraped_at:
+                record["scraped_at"] = v.scraped_at.isoformat()
+
+            # Handle member_status enum
+            if hasattr(record.get("member_status"), 'value'):
+                record["member_status"] = record["member_status"].value
+
+            records.append(record)
 
         if not records:
             return 0
@@ -264,86 +300,91 @@ class VideoStorage:
         )
         return len(records)
 
-    def upsert_video_detail(self, video: VideoDetail) -> None:
+    def upsert_video_detail(self, video: Any) -> None:
         """Insert or update video with full details.
 
+        Supports both eroasmr and zhumianwang VideoDetail models.
+
         Args:
-            video: VideoDetail object
+            video: VideoDetail object (any site-specific model)
         """
-        video_site_id = getattr(video, 'site_id', self.site_id)
+        # Use model_dump() to get all fields
+        data = video.model_dump()
+        video_site_id = data.get('site_id', self.site_id)
+
+        # Convert datetime objects to ISO format
+        detail_scraped_at = data.get("detail_scraped_at")
+        if hasattr(detail_scraped_at, 'isoformat'):
+            detail_scraped_at = detail_scraped_at.isoformat()
+
+        # Convert enum values
+        region = data.get("region")
+        if hasattr(region, 'value'):
+            region = region.value
+
+        member_status = data.get("member_status")
+        if hasattr(member_status, 'value'):
+            member_status = member_status.value
+
+        # Build update record with all possible fields
+        update_data = {
+            "title": data.get("title"),
+            "video_url": data.get("video_url"),
+            "thumbnail_url": data.get("thumbnail_url"),
+            "duration": data.get("duration"),
+            "duration_seconds": data.get("duration_seconds"),
+            # Eroasmr fields
+            "likes": data.get("likes"),
+            "views": data.get("views"),
+            "views_raw": data.get("views_raw"),
+            "excerpt": data.get("excerpt"),
+            "author_url": data.get("author_url"),
+            "author_videos_count": data.get("author_videos_count"),
+            "comment_count": data.get("comment_count"),
+            # Shared fields
+            "description": data.get("description"),
+            "author": data.get("author"),
+            "published_at": data.get("published_at"),
+            # Zhumianwang fields
+            "published_date": data.get("published_date"),
+            "member_status": member_status,
+            "region": region,
+            "year": data.get("year"),
+            "update_time": data.get("update_time"),
+            "play_url": data.get("play_url"),
+            "download_url": data.get("download_url"),
+            "audio_download_url": data.get("audio_download_url"),
+            # Timestamps
+            "detail_scraped_at": detail_scraped_at,
+            "updated_at": datetime.now().isoformat(),
+        }
 
         # Check if video exists
         if self.video_exists(video.slug):
-            # Update existing record
-            self.db.execute(
-                """
-                UPDATE videos SET
-                    title = ?,
-                    video_url = ?,
-                    thumbnail_url = ?,
-                    duration = ?,
-                    duration_seconds = ?,
-                    likes = ?,
-                    views = ?,
-                    views_raw = ?,
-                    excerpt = ?,
-                    description = ?,
-                    author = ?,
-                    author_url = ?,
-                    author_videos_count = ?,
-                    comment_count = ?,
-                    published_at = ?,
-                    detail_scraped_at = ?,
-                    updated_at = ?
-                WHERE slug = ?
-                """,
-                [
-                    video.title,
-                    video.video_url,
-                    video.thumbnail_url,
-                    video.duration,
-                    video.duration_seconds,
-                    video.likes,
-                    video.views,
-                    video.views_raw,
-                    video.excerpt,
-                    video.description,
-                    video.author,
-                    video.author_url,
-                    video.author_videos_count,
-                    video.comment_count,
-                    video.published_at,
-                    video.detail_scraped_at.isoformat(),
-                    datetime.now().isoformat(),
-                    video.slug,
-                ],
-            )
+            # Build dynamic UPDATE query
+            set_clauses = []
+            values = []
+            for key, value in update_data.items():
+                if value is not None:
+                    set_clauses.append(f"{key} = ?")
+                    values.append(value)
+
+            values.append(video.slug)
+            query = f"UPDATE videos SET {', '.join(set_clauses)} WHERE slug = ?"
+            self.db.execute(query, values)
         else:
-            # Insert new record
-            self.db["videos"].insert(
-                {
-                    "slug": video.slug,
-                    "site_id": video_site_id,
-                    "title": video.title,
-                    "video_url": video.video_url,
-                    "thumbnail_url": video.thumbnail_url,
-                    "duration": video.duration,
-                    "duration_seconds": video.duration_seconds,
-                    "likes": video.likes,
-                    "views": video.views,
-                    "views_raw": video.views_raw,
-                    "excerpt": video.excerpt,
-                    "description": video.description,
-                    "author": video.author,
-                    "author_url": video.author_url,
-                    "author_videos_count": video.author_videos_count,
-                    "comment_count": video.comment_count,
-                    "published_at": video.published_at,
-                    "detail_scraped_at": video.detail_scraped_at.isoformat(),
-                    "scraped_at": video.scraped_at.isoformat(),
-                    "updated_at": datetime.now().isoformat(),
-                }
-            )
+            # Insert new record with all available fields
+            insert_data = {
+                "slug": video.slug,
+                "site_id": video_site_id,
+                "scraped_at": data.get("scraped_at"),
+            }
+            # Add all update_data fields that have values
+            for key, value in update_data.items():
+                if value is not None:
+                    insert_data[key] = value
+
+            self.db["videos"].insert(insert_data)
 
     def video_exists(self, slug: str, site_id: str | None = None) -> bool:
         """Check if video exists in database.
