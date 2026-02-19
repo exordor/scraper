@@ -1,66 +1,61 @@
 # CLAUDE.md - eroasmr-scraper
 
-Video metadata scraper for eroasmr.com with Neo4j export support.
+Multi-site video metadata scraper with download and upload pipeline support.
+
+## Supported Sites
+
+| Site | URL | Features |
+|------|-----|----------|
+| EroAsmr | eroasmr.com | Full metadata, tags, categories |
+| 助眠网 | zhumianwang.com | Full metadata, download links (requires login) |
 
 ## Core Principles
 
-### 1. Atomic Functions
+### 1. Multi-Site Architecture
 
-Each function does one thing well:
+Abstract factory pattern for site implementations:
+
+```
+base/           → Abstract classes (BaseSiteParser, BaseSiteScraper, BaseVideo)
+sites/eroasmr/  → EroAsmr implementation
+sites/zhumianwang/ → Zhumianwang implementation
+factory.py      → ScraperFactory for site registration
+```
+
+**Guidelines:**
+- Each site has its own `models.py`, `parser.py`, `scraper.py`
+- Site-specific fields (e.g., `region`, `download_url`) use optional types
+- Storage uses `site_id` column to distinguish data sources
+
+### 2. Atomic Functions
 
 | Module | Responsibility | Dependencies |
 |--------|---------------|--------------|
-| `config.py` | Configuration management | pydantic-settings |
-| `models.py` | Data models | pydantic |
-| `parser.py` | HTML parsing (pure functions) | beautifulsoup4, lxml |
-| `storage.py` | Database operations | sqlite-utils |
-| `scraper.py` | Scraping orchestration | httpx, all above |
+| `config.py` | Multi-site configuration | pydantic-settings |
+| `base/models.py` | Base data models | pydantic |
+| `sites/{site}/models.py` | Site-specific models | pydantic |
+| `sites/{site}/parser.py` | HTML parsing (pure functions) | beautifulsoup4, lxml |
+| `storage.py` | Database operations (with site_id) | sqlite-utils |
+| `factory.py` | Scraper factory | - |
 
-**Guidelines:**
-- Parser functions are pure: input HTML → output structured data
-- Storage methods handle all database operations
-- Scraper coordinates HTTP requests and data flow
-
-### 2. Lazy Loading
+### 3. Lazy Loading
 
 Two-phase scraping for efficiency:
 
 ```
 Phase 1: List pages → Basic info (title, URL, duration, views)
 Phase 2: Detail pages → Full metadata (tags, description, related)
+Phase 3: Play pages → Download links (zhumianwang only, requires login)
 ```
 
-**Usage:**
-```python
-# Quick scan without details
-python main.py full --pages 1-10 --no-details
+### 4. Incremental & Reverse Scraping
 
-# Full scrape with details
-python main.py full --pages 1-10
-```
-
-### 3. Incremental Updates
-
-Avoid redundant scraping:
-
-```python
+```bash
 # Forward mode: stop at first existing video
-python main.py update
+eroasmr-scraper update
 
-# Reverse mode: continue from last position
-python main.py update --reverse
-```
-
-### 4. Reverse Scraping
-
-By default, videos are listed newest-first. Use `--reverse` to scrape oldest-first:
-
-```python
-# Scrape from oldest (page 198) to newest (page 1)
-python main.py full --reverse
-
-# Continue incremental from last position
-python main.py update --reverse
+# Reverse mode: scrape oldest-first, continue from last position
+eroasmr-scraper update --reverse
 ```
 
 ## Development
@@ -75,72 +70,101 @@ uv sync
 ### Commands
 
 ```bash
-# Full scrape (first 3 pages)
-python main.py full --pages 1-3
+# List available sites
+uv run eroasmr-scraper sites
 
-# Full scrape with reverse (oldest first)
-python main.py full --reverse
+# Full scrape (default site: eroasmr)
+uv run eroasmr-scraper full --pages 1-3
 
-# Incremental update
-python main.py update
+# Scrape specific site
+uv run eroasmr-scraper full --site zhumianwang --pages 1-3
+uv run eroasmr-scraper full -s zhumianwang -p 1-3
 
 # View statistics
-python main.py stats
+uv run eroasmr-scraper stats
+uv run eroasmr-scraper stats --site zhumianwang
 
 # Export to Neo4j
-python main.py export --format neo4j --output ./neo4j_import/
+uv run eroasmr-scraper export --format neo4j --output ./neo4j_import/
 ```
 
 ### Code Quality
 
 ```bash
 # Format and lint
-ruff format . && ruff check .
+uv run ruff format . && uv run ruff check .
 
 # Type check
-mypy src/
+uv run mypy src/
 
 # Run tests
-pytest
-```
-
-## Git Conventions
-
-Use Conventional Commits:
-
-```
-feat(scraper): add reverse scraping mode
-fix(parser): handle missing duration field
-docs: update README with CLI usage
-test(parser): add unit tests for list page parser
-refactor(storage): optimize batch inserts
+uv run pytest
 ```
 
 ## Testing
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run with coverage
-pytest --cov=src/eroasmr_scraper
+uv run pytest --cov=src/eroasmr_scraper
 
 # Run specific test
-pytest tests/test_parser.py -v
+uv run pytest tests/test_parser.py -v
+```
+
+## Project Structure
+
+```
+src/eroasmr_scraper/
+├── base/                    # Abstract base classes
+│   ├── models.py           # BaseVideo, BaseVideoDetail, etc.
+│   ├── parser.py           # BaseSiteParser
+│   └── scraper.py          # BaseSiteScraper
+├── sites/                   # Site-specific implementations
+│   ├── eroasmr/
+│   │   ├── models.py
+│   │   └── parser.py
+│   └── zhumianwang/
+│       ├── models.py
+│       ├── parser.py
+│       └── play_parser.py  # Download link extraction
+├── auth/                    # Authentication modules
+│   └── playwright_auth.py  # Playwright cookie extraction
+├── factory.py              # ScraperFactory
+├── storage.py              # SQLite storage with site_id
+├── config.py               # Multi-site configuration
+├── cli.py                  # Typer CLI commands
+├── downloader.py           # Video download logic
+├── pipeline.py             # Download-upload pipeline
+└── parallel_pipeline.py    # Parallel processing
 ```
 
 ## Architecture
 
 ```
-HTTP Request → HTML → Parser → Pydantic Model → SQLite Storage
+HTTP Request → HTML → SiteParser → Pydantic Model → SQLite Storage (with site_id)
                                     ↓
                             Neo4j Export (CSV)
 ```
 
-### Data Flow
+## Adding New Sites
 
-1. **Scraper** fetches HTML via httpx
-2. **Parser** extracts structured data (pure functions)
-3. **Models** validate with Pydantic
-4. **Storage** persists to SQLite via sqlite-utils
-5. **Export** generates Neo4j-compatible CSVs
+1. Create `src/eroasmr_scraper/sites/{site_id}/` directory
+2. Implement `models.py` with Video/VideoDetail inheriting from base models
+3. Implement `parser.py` with Parser inheriting from BaseSiteParser
+4. Register in `factory.py`
+5. Add configuration in `config.py`
+
+## Git Conventions
+
+Use Conventional Commits:
+
+```
+feat(scraper): add zhumianwang site support
+fix(parser): handle missing duration field
+docs: update README with multi-site usage
+test(zhumianwang): add parser tests
+refactor(storage): add site_id column support
+```
