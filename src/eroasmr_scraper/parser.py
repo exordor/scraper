@@ -1,5 +1,7 @@
 """HTML parsing functions (backward compatibility)."""
 
+import re
+
 from eroasmr_scraper.sites.eroasmr.parser import (
     EroAsmrParser,
 )
@@ -7,6 +9,39 @@ from eroasmr_scraper.base.parser import (
     parse_duration,
     parse_slug_from_url,
 )
+
+
+def parse_views(views_str: str | None) -> int:
+    """Parse views string to integer.
+
+    Args:
+        views_str: Views string like "19.86K Views" or "1.5M Views"
+
+    Returns:
+        Views as integer
+    """
+    if not views_str:
+        return 0
+
+    # Extract number and suffix
+    match = re.search(r"([\d.]+)\s*([KM]?)", views_str, re.IGNORECASE)
+    if not match:
+        return 0
+
+    number_str, suffix = match.groups()
+    try:
+        number = float(number_str)
+    except ValueError:
+        return 0
+
+    multiplier = 1
+    if suffix.upper() == "K":
+        multiplier = 1_000
+    elif suffix.upper() == "M":
+        multiplier = 1_000_000
+
+    return int(number * multiplier)
+
 
 # Re-export the class methods as functions for backward compatibility
 def parse_list_page(html: str, base_url: str = "https://eroasmr.com"):
@@ -38,7 +73,6 @@ def is_404_page(html: str):
 def parse_video_source(html: str):
     """Parse video source URL from detail page."""
     from bs4 import BeautifulSoup
-    import re
 
     soup = BeautifulSoup(html, "lxml")
 
@@ -71,6 +105,7 @@ __all__ = [
     "EroAsmrParser",
     "parse_duration",
     "parse_slug_from_url",
+    "parse_views",
     "parse_list_page",
     "parse_detail_page",
     "parse_total_pages",
