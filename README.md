@@ -1,9 +1,17 @@
 # eroasmr-scraper
 
-Video metadata scraper for eroasmr.com with download and upload pipeline support.
+Multi-site video metadata scraper with download and upload pipeline support.
+
+## Supported Sites
+
+| Site | URL | Features |
+|------|-----|----------|
+| EroAsmr | eroasmr.com | Full metadata, tags, categories |
+| 助眠网 | zhumianwang.com | Full metadata, download links (requires login) |
 
 ## Features
 
+- **Multi-site support** - Abstract factory pattern for easy site extension
 - Full and incremental scraping modes
 - Reverse scraping (oldest to newest)
 - SQLite storage with sqlite-utils
@@ -11,6 +19,7 @@ Video metadata scraper for eroasmr.com with download and upload pipeline support
 - Video download with resume support
 - Download-upload pipeline framework
 - Extensible uploader system (Telegram, Google Drive, etc.)
+- Playwright authentication for login-required content
 
 ## Installation
 
@@ -20,11 +29,22 @@ uv sync
 
 ## CLI Commands
 
+### Site Management
+
+```bash
+# List available sites
+eroasmr-scraper sites
+```
+
 ### Scraping Commands
 
 ```bash
-# Test scrape (first 3 pages)
+# Test scrape (first 3 pages) - default site: eroasmr
 eroasmr-scraper full --pages 1-3
+
+# Scrape specific site
+eroasmr-scraper full --site zhumianwang --pages 1-3
+eroasmr-scraper full -s zhumianwang -p 1-3
 
 # Full scrape (reverse - oldest first)
 eroasmr-scraper full --reverse
@@ -46,8 +66,11 @@ eroasmr-scraper refresh-durations --pages 1-10
 ### Statistics & Verification
 
 ```bash
-# View database statistics
+# View database statistics (default: eroasmr)
 eroasmr-scraper stats
+
+# View statistics for specific site
+eroasmr-scraper stats --site zhumianwang
 
 # Verify data integrity
 eroasmr-scraper verify
@@ -140,6 +163,7 @@ eroasmr-scraper --version
 
 | Option | Description |
 |--------|-------------|
+| `--site`, `-s` | Site to scrape: eroasmr, zhumianwang (default: eroasmr) |
 | `--pages`, `-p` | Page range (e.g., '1-10' or '5') |
 | `--reverse`, `-r` | Scrape from oldest to newest |
 | `--no-details` | Skip detail page scraping |
@@ -149,9 +173,16 @@ eroasmr-scraper --version
 
 | Option | Description |
 |--------|-------------|
+| `--site`, `-s` | Site to update (default: eroasmr) |
 | `--reverse`, `-r` | Continue from last position |
 | `--no-details` | Skip detail page scraping |
 | `--verbose` | Enable debug logging |
+
+### `stats` - Database Statistics
+
+| Option | Description |
+|--------|-------------|
+| `--site`, `-s` | Site to show stats for (default: eroasmr) |
 
 ### `download` - Download Videos
 
@@ -190,15 +221,65 @@ eroasmr-scraper --version
 | `--format`, `-f` | Export format: neo4j, jsonl (default: neo4j) |
 | `--output`, `-o` | Output directory/file |
 
+## Project Structure
+
+```
+src/eroasmr_scraper/
+├── base/                    # Abstract base classes
+│   ├── models.py           # BaseVideo, BaseVideoDetail, etc.
+│   ├── parser.py           # BaseSiteParser
+│   └── scraper.py          # BaseSiteScraper
+├── sites/                   # Site-specific implementations
+│   ├── eroasmr/            # EroAsmr site
+│   │   ├── models.py
+│   │   └── parser.py
+│   └── zhumianwang/        # Zhumianwang site
+│       ├── models.py
+│       ├── parser.py
+│       └── play_parser.py  # Download link extraction
+├── auth/                    # Authentication modules
+│   └── playwright_auth.py  # Playwright cookie extraction
+├── factory.py              # ScraperFactory for multi-site
+├── storage.py              # SQLite storage with site_id support
+├── config.py               # Multi-site configuration
+├── cli.py                  # Typer CLI commands
+├── downloader.py           # Video download logic
+├── pipeline.py             # Download-upload pipeline
+└── parallel_pipeline.py    # Parallel processing
+```
+
 ## Data Directory Structure
 
 ```
 data/
-├── videos.db              # SQLite database
+├── videos.db              # SQLite database (multi-site with site_id)
 ├── downloads/             # Downloaded video files
 │   └── {slug}.mp4
-└── download_archive.txt   # yt-dlp archive for resume
+├── download_archive.txt   # yt-dlp archive for resume
+└── cookies.json           # Playwright cookies for auth
 ```
+
+## Configuration
+
+Configuration is managed via `.env` file (see `.env.example`):
+
+```bash
+# Site selection
+SCRAPER_DEFAULT_SITE=eroasmr
+
+# Per-site HTTP settings
+SCRAPER_SITES__EROASMR__HTTP__DELAY_MIN=1.5
+SCRAPER_SITES__ZHUMIANWANG__HTTP__DELAY_MIN=2.0
+```
+
+## Adding New Sites
+
+1. Create `src/eroasmr_scraper/sites/{site_id}/` directory
+2. Implement `models.py` with Video/VideoDetail inheriting from base models
+3. Implement `parser.py` with Parser inheriting from BaseSiteParser
+4. Implement `scraper.py` with Scraper inheriting from BaseSiteScraper
+5. Register in `factory.py`
+6. Add configuration in `config.py`
 
 ## License
 
