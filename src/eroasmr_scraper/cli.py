@@ -976,3 +976,146 @@ def uploaders() -> None:
     console.print(table)
     console.print()
     console.print("[dim]Configure uploaders via environment variables (EROASMR_<NAME>__<FIELD>)[/dim]")
+
+
+@app.command()
+def dashboard(
+    site: SiteChoice = "eroasmr",  # type: ignore
+    refresh: Annotated[
+        int,
+        typer.Option("--refresh", "-r", help="Refresh interval in seconds"),
+    ] = 5,
+) -> None:
+    """Show real-time scraping progress dashboard.
+
+    Displays:
+    - Scraping progress (pages, videos)
+    - Download/upload statistics
+    - Disk space usage
+    - Recent activity
+
+    Press Ctrl+C to exit.
+    """
+    import shutil
+    from rich.live import Live
+    from rich.layout import Layout
+    from rich.panel import Panel
+    from datetime import datetime
+
+    storage = VideoStorage(site_id=site)
+
+    def get_disk_info() -> dict:
+        """Get disk usage info."""
+        try:
+            download_dir = Path("data/downloads")
+            if download_dir.exists():
+                usage = shutil.disk_usage(download_dir)
+                return {
+                    "total_gb": usage.total / (1024**3),
+                    "used_gb": usage.used / (1024**3),
+                    "free_gb": usage.free / (1024**3),
+                    "percent": (usage.used / usage.total) * 100,
+                }
+        except Exception:
+            pass
+        return {"total_gb": 0, "used_gb": 0, "free_gb": 0, "percent": 0}
+
+    def count_pending_files() -> int:
+        """Count files waiting to be uploaded."""
+        try:
+            download_dir = Path("data/downloads")
+            if download_dir.exists():
+                return len(list(download_dir.glob("*.mp4"))) + len(list(download_dir.glob("*.mp3")))
+        except Exception:
+            pass
+        return 0
+
+    def build_layout() -> Layout:
+        """Build the dashboard layout."""
+        layout = Layout()
+
+        # Get all stats
+        db_stats = storage.get_stats()
+        dl_stats = storage.get_download_stats()
+        disk = get_disk_info()
+        pending_files = count_pending_files()
+        progress = storage.get_progress()
+
+        # Header
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        header = Panel(
+            f"[bold cyan]eroasmr-scraper[/bold cyan] | Site: [green]{site}[/green] | {now}",
+            title="Dashboard",
+            border_style="blue",
+        )
+
+        # Scraping Progress Panel
+        if progress:
+            scrape_info = (
+                f"Mode: [yellow]{progress.mode}[/yellow]\n"
+                f"Phase: [yellow]{progress.phase}[/yellow]\n"
+                f"Page: [cyan]{progress.last_page}[/cyan] / [dim]{progress.total_pages or '?'}[/dim]\n"
+                f"Updated: [dim]{progress.last_updated.strftime('%H:%M:%S')}[/dim]"
+            )
+        else:
+            scrape_info = "[dim]No scraping progress yet[/dim]"
+
+        scrape_panel = Panel(scrape_info, title="📦 Scraping Progress", border_style="green")
+
+        # Database Stats Panel
+        db_info = (
+            f"Videos: [cyan]{db_stats['videos']}[/cyan]\n"
+            f"With Details: [green]{db_stats['videos_with_details']}[/green]\n"
+            f"Tags: [yellow]{db_stats['tags']}[/yellow]\n"
+            f"Failed URLs: [red]{db_stats['failed_urls']}[/red]"
+        )
+        db_panel = Panel(db_info, title="🗄️ Database", border_style="cyan")
+
+        # Download Stats Panel
+        dl_info = (
+            f"Total: [dim]{dl_stats['total_videos']}[/dim]\n"
+            f"Completed: [green]{dl_stats['completed']}[/green]\n"
+            f"Pending: [yellow]{dl_stats['pending']}[/yellow]\n"
+            f"Failed: [red]{dl_stats['failed']}[/red]"
+        )
+        dl_panel = Panel(dl_info, title="⬇️ Downloads", border_style="yellow")
+
+        # Disk Space Panel
+        disk_color = "green" if disk["percent"] < 70 else "yellow" if disk["percent"] < 90 else "red"
+        disk_info = (
+            f"Free: [cyan]{disk['free_gb']:.1f}[/cyan] GB\n"
+            f"Used: [{disk_color}]{disk['used_gb']:.1f}[/{disk_color}] GB\n"
+            f"Total: [dim]{disk['total_gb']:.1f}[/dim] GB\n"
+            f"Usage: [{disk_color}]{disk['percent']:.1f}%[/{disk_color}]"
+        )
+        disk_panel = Panel(disk_info, title="💾 Disk Space", border_style=disk_color)
+
+        # Pending Files Panel
+        pending_color = "green" if pending_files == 0 else "yellow" if pending_files < 5 else "red"
+        pending_info = f"Files waiting: [{pending_color}]{pending_files}[/{pending_color}]"
+        pending_panel = Panel(pending_info, title="📁 Pending Uploads", border_style=pending_color)
+
+        # Build layout
+        layout.split_column(
+            Layout(header, size=3),
+            Layout(name="body"),
+        )
+        layout["body"].split_row(
+            Layout(name="left"),
+            Layout(name="right"),
+        )
+        layout["left"].split_column(scrape_panel, db_panel)
+        layout["right"].split_column(dl_panel, disk_panel, pending_panel)
+
+        return layout
+
+    # Run live dashboard
+    console.print("[cyan]Starting dashboard... Press Ctrl+C to exit.[/cyan]\n")
+
+    try:
+        with Live(build_layout(), refresh_per_second=1 / refresh, console=console):
+            import time
+            while True:
+                time.sleep(refresh)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Dashboard stopped.[/yellow]")
