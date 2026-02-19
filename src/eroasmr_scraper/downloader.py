@@ -1,11 +1,13 @@
 """Video downloader using httpx with direct URL extraction."""
 
+import io
 import logging
 import random
 import time
 from pathlib import Path
 
 import httpx
+from PIL import Image
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -243,6 +245,8 @@ class VideoDownloader:
     def download_thumbnail(self, slug: str) -> Path | None:
         """Download thumbnail for a video.
 
+        Resizes thumbnail to max 320px (Telegram Bot API requirement).
+
         Args:
             slug: Video slug
 
@@ -266,8 +270,24 @@ class VideoDownloader:
             with self._get_client() as client:
                 response = client.get(thumbnail_url, follow_redirects=True)
                 if response.status_code == 200:
-                    output_path.write_bytes(response.content)
-                    logger.debug("Downloaded thumbnail: %s", slug)
+                    # Resize image to max 320px (Telegram requirement)
+                    img = Image.open(io.BytesIO(response.content))
+
+                    # Calculate new size maintaining aspect ratio
+                    max_dimension = 320
+                    if max(img.size) > max_dimension:
+                        ratio = max_dimension / max(img.size)
+                        new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                        img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+                    # Convert to RGB if necessary (for JPEG)
+                    if img.mode in ("RGBA", "P"):
+                        img = img.convert("RGB")
+
+                    # Save as JPEG
+                    img.save(output_path, "JPEG", quality=85)
+                    logger.debug("Downloaded thumbnail: %s (%dx%d)",
+                                 slug, img.size[0], img.size[1])
                     return output_path
                 else:
                     logger.warning("Failed to download thumbnail for %s: HTTP %d",
