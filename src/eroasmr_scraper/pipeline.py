@@ -102,13 +102,14 @@ class DownloadUploadPipeline:
             )
 
     def _upload_to_all(
-        self, file_path: Path, slug: str
+        self, file_path: Path, slug: str, thumbnail_path: Path | None = None
     ) -> dict[str, UploadResult]:
         """Upload file to all active uploaders.
 
         Args:
             file_path: Path to the video file
             slug: Video slug
+            thumbnail_path: Path to the thumbnail file (optional)
 
         Returns:
             Dict mapping storage_type to UploadResult
@@ -120,7 +121,7 @@ class DownloadUploadPipeline:
                 logger.info(
                     "Uploading %s to %s", slug, uploader.storage_type
                 )
-                result = uploader.upload(file_path, slug)
+                result = uploader.upload(file_path, slug, thumbnail_path=thumbnail_path)
                 results[uploader.storage_type] = result
 
                 if result.success:
@@ -225,14 +226,17 @@ class DownloadUploadPipeline:
             logger.error(result.download_error)
             return result
 
+        # Step 2b: Download thumbnail
+        thumbnail_path = self.downloader.download_thumbnail(slug)
+
         # Step 3: Upload to all platforms
-        upload_results = self._upload_to_all(file_path, slug)
+        upload_results = self._upload_to_all(file_path, slug, thumbnail_path=thumbnail_path)
         result.upload_results = upload_results
 
         # Step 4: Record successful uploads
         self._record_uploads(slug, upload_results)
 
-        # Step 5: Optionally delete local file
+        # Step 5: Optionally delete local files
         if self._should_delete_local(upload_results):
             try:
                 file_path.unlink()
@@ -240,6 +244,13 @@ class DownloadUploadPipeline:
                 logger.info("Deleted local file: %s", file_path)
             except OSError as e:
                 logger.warning("Failed to delete local file %s: %s", file_path, e)
+            # Also delete thumbnail
+            if thumbnail_path and thumbnail_path.exists():
+                try:
+                    thumbnail_path.unlink()
+                    logger.debug("Deleted thumbnail: %s", thumbnail_path)
+                except OSError as e:
+                    logger.warning("Failed to delete thumbnail %s: %s", thumbnail_path, e)
 
         return result
 

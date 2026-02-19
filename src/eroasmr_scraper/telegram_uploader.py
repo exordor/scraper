@@ -65,6 +65,32 @@ class TelegramUploader(Uploader):
                 return path_str.replace(local_prefix, container_prefix, 1)
         return path_str
 
+    def _get_video_metadata(self, slug: str) -> dict:
+        """Get video metadata from storage.
+
+        Args:
+            slug: Video slug
+
+        Returns:
+            Dict with thumbnail_url, duration_seconds, width, height
+        """
+        metadata = {
+            "thumbnail_url": None,
+            "duration": None,
+            "width": None,
+            "height": None,
+        }
+
+        if self.storage:
+            video = self.storage.get_video_by_slug(slug)
+            if video:
+                metadata["thumbnail_url"] = video.get("thumbnail_url")
+                metadata["duration"] = video.get("duration_seconds")
+                # width and height would need to be extracted from video file
+                # or stored during scraping - currently not available
+
+        return metadata
+
     def _get_caption(self, slug: str) -> str:
         """Generate caption from video metadata.
 
@@ -101,7 +127,7 @@ class TelegramUploader(Uploader):
         Args:
             file_path: Path to the video file (local or mapped to container)
             slug: Video slug for reference
-            **kwargs: Additional parameters (caption, etc.)
+            **kwargs: Additional parameters (caption, thumbnail_path, etc.)
 
         Returns:
             UploadResult with upload status and location info
@@ -119,6 +145,10 @@ class TelegramUploader(Uploader):
             )
 
         caption = kwargs.get("caption") or self._get_caption(slug)
+        thumbnail_path = kwargs.get("thumbnail_path")
+
+        # Get video metadata
+        metadata = self._get_video_metadata(slug)
 
         # Use synchronous upload endpoint
         url = f"{self.upload_service_url}/api/v1/upload/"
@@ -126,13 +156,32 @@ class TelegramUploader(Uploader):
         # Map local path to container path if configured
         remote_file_path = self._map_file_path(file_path)
 
-        # Use file_path for local files
+        # Map thumbnail path if provided
+        remote_thumbnail_path = None
+        if thumbnail_path:
+            remote_thumbnail_path = self._map_file_path(thumbnail_path)
+
+        # Build payload with all available metadata
         payload = {
             "tenant_id": self.tenant_id,
             "file_path": remote_file_path,
             "caption": caption,
             "parse_mode": self.parse_mode,
         }
+
+        # Add thumbnail if available
+        if remote_thumbnail_path:
+            payload["thumbnail_path"] = remote_thumbnail_path
+        elif metadata.get("thumbnail_url"):
+            payload["thumbnail_url"] = metadata["thumbnail_url"]
+
+        # Add video metadata if available
+        if metadata.get("duration"):
+            payload["duration"] = metadata["duration"]
+        if metadata.get("width"):
+            payload["width"] = metadata["width"]
+        if metadata.get("height"):
+            payload["height"] = metadata["height"]
 
         try:
             with httpx.Client(timeout=600.0) as client:  # 10 min timeout for large files

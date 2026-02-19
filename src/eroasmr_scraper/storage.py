@@ -758,8 +758,11 @@ class VideoStorage:
         Returns:
             List of video slugs
         """
-        # Get all video slugs
-        all_slugs = [row["slug"] for row in self.db["videos"].rows]
+        # Get all video slugs ordered by id (insertion order)
+        all_slugs = [
+            row["slug"]
+            for row in self.db["videos"].rows_where(order_by="id")
+        ]
 
         # Get already downloaded slugs
         if include_failed:

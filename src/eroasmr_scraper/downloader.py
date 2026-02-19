@@ -240,6 +240,43 @@ class VideoDownloader:
 
             return True, None
 
+    def download_thumbnail(self, slug: str) -> Path | None:
+        """Download thumbnail for a video.
+
+        Args:
+            slug: Video slug
+
+        Returns:
+            Path to downloaded thumbnail or None if failed
+        """
+        # Get video metadata
+        video = self.storage.get_video_by_slug(slug)
+        if not video or not video.get("thumbnail_url"):
+            logger.debug("No thumbnail URL for %s", slug)
+            return None
+
+        thumbnail_url = video["thumbnail_url"]
+        output_path = self.output_dir / f"{slug}_thumb.jpg"
+
+        # Skip if already exists
+        if output_path.exists():
+            return output_path
+
+        try:
+            with self._get_client() as client:
+                response = client.get(thumbnail_url, follow_redirects=True)
+                if response.status_code == 200:
+                    output_path.write_bytes(response.content)
+                    logger.debug("Downloaded thumbnail: %s", slug)
+                    return output_path
+                else:
+                    logger.warning("Failed to download thumbnail for %s: HTTP %d",
+                                   slug, response.status_code)
+                    return None
+        except Exception as e:
+            logger.warning("Failed to download thumbnail for %s: %s", slug, e)
+            return None
+
     def download_all(
         self,
         limit: int | None = None,
