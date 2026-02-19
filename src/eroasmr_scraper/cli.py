@@ -38,7 +38,7 @@ console = Console()
 # Site ID type for CLI options
 SiteChoice = Annotated[
     Literal["eroasmr", "zhumianwang"],
-    typer.Option("--site", "-s", help="Site to scrape (eroasmr, zhumianwang)"),
+    typer.Option("--site", "-s", help="Site to scrape (eroasmr, zhumianwang)", case_sensitive=False),
 ]
 
 
