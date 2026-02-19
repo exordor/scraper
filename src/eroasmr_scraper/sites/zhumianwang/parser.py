@@ -122,26 +122,60 @@ class ZhumianwangParser(BaseSiteParser):
         """
         soup = BeautifulSoup(html, "lxml")
 
-        # Description
-        desc_elem = soup.select_one(".entry-content, .content, .video-desc, article p")
-        description = desc_elem.get_text(strip=True) if desc_elem else None
+        # Description - look for section containing "ASMR介绍" or "ASMR Details"
+        description = None
+        for section in soup.find_all(["div", "section", "article"]):
+            section_text = section.get_text()
+            if "ASMR介绍" in section_text or "ASMR Details" in section_text or "介绍" in section_text[:50]:
+                # Found the description section, get paragraph text
+                paragraphs = section.find_all("p")
+                if paragraphs:
+                    desc_parts = []
+                    for p in paragraphs:
+                        text = p.get_text(strip=True)
+                        if text and len(text) > 10:  # Skip very short paragraphs
+                            desc_parts.append(text)
+                    if desc_parts:
+                        description = " ".join(desc_parts[:3])  # Take first 3 paragraphs
+                        description = description[:2000]  # Limit length
+                        break
 
-        # Region (中国/韩国/日本/欧美)
+        # Fallback: try common description selectors
+        if not description:
+            desc_elem = soup.select_one(".entry-content, .content, .video-desc, article p")
+            if desc_elem:
+                description = desc_elem.get_text(strip=True)[:2000]
+
+        # Region (中国/韩国/日本/欧美) - look specifically in video info section
+        # Find "地区：" text and get the following link
         region = Region.UNKNOWN
-        for link in soup.select("a[href]"):
-            href = link.get("href", "")
-            if "/hg" in href or "韩国" in link.get_text():
-                region = Region.KOREA
-                break
-            elif "/rb" in href or "日本" in link.get_text():
-                region = Region.JAPAN
-                break
-            elif "/zg" in href or "中国" in link.get_text():
-                region = Region.CHINA
-                break
-            elif "/om" in href or "欧美" in link.get_text():
-                region = Region.WESTERN
-                break
+        page_text = soup.get_text()
+        if "地区：韩国" in page_text or "地区:韩国" in page_text:
+            region = Region.KOREA
+        elif "地区：日本" in page_text or "地区:日本" in page_text:
+            region = Region.JAPAN
+        elif "地区：中国" in page_text or "地区:中国" in page_text:
+            region = Region.CHINA
+        elif "地区：欧美" in page_text or "地区:欧美" in page_text:
+            region = Region.WESTERN
+        else:
+            # Fallback: look for region links after "地区：" label
+            for li in soup.select("li"):
+                li_text = li.get_text()
+                if "地区" in li_text:
+                    # Found the region list item
+                    region_link = li.select_one("a[href*='/hg'], a[href*='/rb'], a[href*='/zg'], a[href*='/om']")
+                    if region_link:
+                        href = region_link.get("href", "")
+                        if "/hg" in href:
+                            region = Region.KOREA
+                        elif "/rb" in href:
+                            region = Region.JAPAN
+                        elif "/zg" in href:
+                            region = Region.CHINA
+                        elif "/om" in href:
+                            region = Region.WESTERN
+                    break
 
         # Year
         year = None
@@ -177,9 +211,21 @@ class ZhumianwangParser(BaseSiteParser):
             if tag_name and tag_slug:
                 tags.append(Tag(name=tag_name, slug=tag_slug, tag_url=tag_url))
 
-        # Related videos
+        # Related videos - look for section containing "相关推荐" or "精选ASMR"
         related_videos: list[RelatedVideo] = []
-        related_section = soup.select_one(".related, .recommend")
+        related_section = None
+
+        # Find the related videos section by text content
+        for section in soup.find_all(["div", "section", "ul"]):
+            section_text = section.get_text()[:100]  # Check first 100 chars
+            if "相关推荐" in section_text or "精选ASMR" in section_text or "推荐" in section_text:
+                related_section = section
+                break
+
+        # Fallback to class-based selectors
+        if not related_section:
+            related_section = soup.select_one(".related, .recommend, .related-posts")
+
         if related_section:
             for idx, item in enumerate(related_section.select("li")):
                 link = item.select_one("a[href*='/asmr/']")
@@ -191,10 +237,24 @@ class ZhumianwangParser(BaseSiteParser):
                 if rel_url and not rel_url.startswith("http"):
                     rel_url = urljoin(self.base_url, rel_url)
 
+                # Skip article URLs (they have underscore like /asmr_43050.html)
+                if "/asmr_" in rel_url:
+                    continue
+
                 if "/asmr/" in rel_url:
-                    rel_slug = self.parse_slug_from_url(rel_url)
+                    # Extract slug from URL like /asmr/33867.html -> 33867
+                    rel_slug_match = re.search(r"/asmr/(\d+)\.html", rel_url)
+                    if rel_slug_match:
+                        rel_slug = rel_slug_match.group(1)
+                    else:
+                        rel_slug = self.parse_slug_from_url(rel_url).replace(".html", "")
+
                     img = item.select_one("img")
-                    rel_thumb = img.get("src") if img else None
+                    rel_thumb = None
+                    if img:
+                        rel_thumb = img.get("src") or img.get("data-src")
+                        if rel_thumb and not rel_thumb.startswith("http"):
+                            rel_thumb = urljoin(self.base_url, rel_thumb)
 
                     # Check member status
                     rel_status = MemberStatus.FREE
