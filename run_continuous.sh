@@ -165,14 +165,14 @@ main() {
         local success=false
 
         while [[ $retry_count -lt $MAX_RETRIES ]]; do
-            ((batch_num++))
+            batch_num=$((batch_num + 1))
             if run_batch $batch_num; then
                 success=true
                 consecutive_failures=0
                 break
             else
-                ((retry_count++))
-                ((consecutive_failures++))
+                retry_count=$((retry_count + 1))
+                consecutive_failures=$((consecutive_failures + 1))
                 if [[ $retry_count -lt $MAX_RETRIES ]]; then
                     local wait_time=$((30 * retry_count))
                     log "Batch failed (attempt $retry_count/$MAX_RETRIES). Retrying in ${wait_time}s..."
