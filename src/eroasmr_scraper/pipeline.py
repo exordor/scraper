@@ -29,16 +29,22 @@ class VideoProcessResult:
     Attributes:
         slug: Video slug
         downloaded: Whether download succeeded
+        audio_downloaded: Whether audio download succeeded
         upload_results: Dict mapping storage_type to UploadResult
+        audio_upload_results: Dict mapping storage_type to UploadResult for audio
         download_error: Download error message if failed
         local_file_deleted: Whether local file was cleaned up
+        audio_file_deleted: Whether audio file was cleaned up
     """
 
     slug: str
     downloaded: bool = False
+    audio_downloaded: bool = False
     upload_results: dict[str, UploadResult] = field(default_factory=dict)
+    audio_upload_results: dict[str, UploadResult] = field(default_factory=dict)
     download_error: str | None = None
     local_file_deleted: bool = False
+    audio_file_deleted: bool = False
 
 
 class DownloadUploadPipeline:
@@ -197,19 +203,25 @@ class DownloadUploadPipeline:
             # Delete if at least one upload succeeded
             return any(r.success for r in upload_results.values())
 
-    def process_video(self, slug: str) -> VideoProcessResult:
+    def process_video(self, slug: str, include_audio: bool = True) -> VideoProcessResult:
         """Process a single video: download -> upload -> cleanup.
 
         Args:
             slug: Video slug
+            include_audio: If True, also process audio files (zhumianwang only)
 
         Returns:
             VideoProcessResult with processing details
         """
         result = VideoProcessResult(slug=slug)
 
-        # Step 1: Download video
-        success, error = self.downloader.download_video(slug)
+        # Check if this is zhumianwang (for audio support)
+        video = self.storage.get_video_by_slug(slug)
+        site_id = video.get("site_id", "eroasmr") if video else "eroasmr"
+        should_download_audio = include_audio and site_id == "zhumianwang"
+
+        # Step 1: Download video (and audio for zhumianwang)
+        success, error = self.downloader.download_video(slug, include_audio=should_download_audio)
 
         if not success:
             result.download_error = error
@@ -218,23 +230,35 @@ class DownloadUploadPipeline:
 
         result.downloaded = True
 
-        # Step 2: Get file path
+        # Step 2: Get file paths
         file_path = self.downloader.output_dir / f"{slug}.mp4"
+        audio_path = self.downloader.output_dir / f"{slug}.mp3"
 
         if not file_path.exists():
             result.download_error = f"Downloaded file not found: {file_path}"
             logger.error(result.download_error)
             return result
 
+        # Check if audio was downloaded
+        if should_download_audio and audio_path.exists():
+            result.audio_downloaded = True
+
         # Step 2b: Download thumbnail
         thumbnail_path = self.downloader.download_thumbnail(slug)
 
-        # Step 3: Upload to all platforms
+        # Step 3: Upload video to all platforms
         upload_results = self._upload_to_all(file_path, slug, thumbnail_path=thumbnail_path)
         result.upload_results = upload_results
 
+        # Step 3b: Upload audio to all platforms (if downloaded)
+        if result.audio_downloaded:
+            audio_upload_results = self._upload_to_all(audio_path, f"{slug}_audio", thumbnail_path=None)
+            result.audio_upload_results = audio_upload_results
+
         # Step 4: Record successful uploads
         self._record_uploads(slug, upload_results)
+        if result.audio_downloaded:
+            self._record_uploads(f"{slug}_audio", result.audio_upload_results)
 
         # Step 5: Optionally delete local files
         if self._should_delete_local(upload_results):
@@ -251,6 +275,15 @@ class DownloadUploadPipeline:
                     logger.debug("Deleted thumbnail: %s", thumbnail_path)
                 except OSError as e:
                     logger.warning("Failed to delete thumbnail %s: %s", thumbnail_path, e)
+
+        # Delete audio file if all uploads succeeded
+        if result.audio_downloaded and self._should_delete_local(result.audio_upload_results):
+            try:
+                audio_path.unlink()
+                result.audio_file_deleted = True
+                logger.info("Deleted audio file: %s", audio_path)
+            except OSError as e:
+                logger.warning("Failed to delete audio file %s: %s", audio_path, e)
 
         return result
 

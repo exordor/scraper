@@ -175,13 +175,17 @@ class VideoDownloader:
             return False, f"Unexpected error: {e}"
 
     def download_video(
-        self, slug: str, task_id: int | None = None
+        self, slug: str, task_id: int | None = None, include_audio: bool = False
     ) -> tuple[bool, str | None]:
         """Download a single video.
+
+        For eroasmr.com: Fetches video page and extracts URL.
+        For zhumianwang: Uses pre-scraped download_url from database.
 
         Args:
             slug: Video slug
             task_id: Rich progress task ID (optional)
+            include_audio: If True, also download audio file (zhumianwang only)
 
         Returns:
             Tuple of (success, error_message)
@@ -192,33 +196,49 @@ class VideoDownloader:
             return True, None
 
         # Check if video exists in database
-        if not self.storage.video_exists(slug):
+        video = self.storage.get_video_by_slug(slug)
+        if not video:
             return False, f"Video not found in database: {slug}"
+
+        site_id = video.get("site_id", "eroasmr")
 
         # Mark as downloading
         self.storage.mark_downloading(slug)
 
         with self._get_client() as client:
-            # Step 1: Fetch video page
-            logger.info("Fetching video page: %s", slug)
-            html = self._fetch_video_page(client, slug)
+            video_url = None
+            audio_url = None
 
-            if not html:
-                error_msg = "Failed to fetch video page"
-                self.storage.mark_failed(slug, error_msg)
-                return False, error_msg
+            # Get download URLs based on site
+            if site_id == "zhumianwang":
+                # Use pre-scraped URLs from database
+                video_url = video.get("download_url")
+                audio_url = video.get("audio_download_url")
 
-            # Step 2: Extract video URL
-            video_url = self._extract_video_url(html)
+                if not video_url:
+                    error_msg = "No download_url in database for zhumianwang video"
+                    self.storage.mark_failed(slug, error_msg)
+                    return False, error_msg
+            else:
+                # eroasmr: Fetch video page and extract URL
+                logger.info("Fetching video page: %s", slug)
+                html = self._fetch_video_page(client, slug)
 
-            if not video_url:
-                error_msg = "Could not find video source URL in page"
-                self.storage.mark_failed(slug, error_msg)
-                return False, error_msg
+                if not html:
+                    error_msg = "Failed to fetch video page"
+                    self.storage.mark_failed(slug, error_msg)
+                    return False, error_msg
+
+                video_url = self._extract_video_url(html)
+
+                if not video_url:
+                    error_msg = "Could not find video source URL in page"
+                    self.storage.mark_failed(slug, error_msg)
+                    return False, error_msg
 
             logger.debug("Found video URL: %s", video_url)
 
-            # Step 3: Download video file
+            # Download video file
             output_path = self.output_dir / f"{slug}.mp4"
 
             logger.info("Downloading video: %s", slug)
@@ -231,14 +251,76 @@ class VideoDownloader:
                     output_path.unlink()
                 return False, error
 
-            # Step 4: Verify and save
+            # Download audio file if requested (zhumianwang only)
+            audio_path = None
+            if include_audio and audio_url and site_id == "zhumianwang":
+                audio_path = self.output_dir / f"{slug}.mp3"
+                logger.info("Downloading audio: %s", slug)
+                audio_success, audio_error = self._download_file(client, audio_url, audio_path, task_id)
+
+                if not audio_success:
+                    logger.warning("Failed to download audio for %s: %s", slug, audio_error)
+                    # Don't fail the whole download, just log the warning
+                    audio_path = None
+
+            # Verify and save
             file_size = output_path.stat().st_size
             relative_path = f"downloads/{slug}.mp4"
 
-            self.storage.mark_completed(slug, relative_path, file_size)
+            # Store audio path if downloaded
+            if audio_path and audio_path.exists():
+                audio_size = audio_path.stat().st_size
+                self.storage.mark_completed(slug, relative_path, file_size, audio_path=f"downloads/{slug}.mp3", audio_size=audio_size)
+            else:
+                self.storage.mark_completed(slug, relative_path, file_size)
+
             self._save_to_archive(slug)
 
             logger.info("Downloaded: %s (%.2f MB)", slug, file_size / 1024 / 1024)
+
+            return True, None
+
+    def download_audio(self, slug: str, task_id: int | None = None) -> tuple[bool, str | None]:
+        """Download audio file for a video (zhumianwang only).
+
+        Args:
+            slug: Video slug
+            task_id: Rich progress task ID (optional)
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        # Check if video exists in database
+        video = self.storage.get_video_by_slug(slug)
+        if not video:
+            return False, f"Video not found in database: {slug}"
+
+        site_id = video.get("site_id", "eroasmr")
+        if site_id != "zhumianwang":
+            return False, "Audio download only supported for zhumianwang"
+
+        audio_url = video.get("audio_download_url")
+        if not audio_url:
+            return False, "No audio_download_url in database"
+
+        output_path = self.output_dir / f"{slug}.mp3"
+
+        # Skip if already exists
+        if output_path.exists():
+            logger.info("Audio already exists: %s", slug)
+            return True, None
+
+        with self._get_client() as client:
+            logger.info("Downloading audio: %s", slug)
+            success, error = self._download_file(client, audio_url, output_path, task_id)
+
+            if not success:
+                if output_path.exists():
+                    output_path.unlink()
+                return False, error
+
+            file_size = output_path.stat().st_size
+            logger.info("Downloaded audio: %s (%.2f MB)", slug, file_size / 1024 / 1024)
 
             return True, None
 

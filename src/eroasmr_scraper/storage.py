@@ -197,6 +197,8 @@ class VideoStorage:
                 "status": str,
                 "local_path": str,
                 "file_size": int,
+                "audio_path": str,
+                "audio_size": int,
                 "error_message": str,
                 "downloaded_at": str,
             },
@@ -917,6 +919,8 @@ class VideoStorage:
         status: DownloadStatus,
         local_path: str | None = None,
         file_size: int | None = None,
+        audio_path: str | None = None,
+        audio_size: int | None = None,
         error_message: str | None = None,
         site_id: str | None = None,
     ) -> None:
@@ -927,6 +931,8 @@ class VideoStorage:
             status: New status
             local_path: Local file path (on completion)
             file_size: File size in bytes (on completion)
+            audio_path: Audio file path (on completion)
+            audio_size: Audio file size in bytes (on completion)
             error_message: Error message (on failure)
             site_id: Optional site identifier
         """
@@ -940,6 +946,8 @@ class VideoStorage:
         if status == DownloadStatus.COMPLETED:
             record["local_path"] = local_path
             record["file_size"] = file_size
+            record["audio_path"] = audio_path
+            record["audio_size"] = audio_size
             record["downloaded_at"] = datetime.now().isoformat()
         elif status == DownloadStatus.FAILED:
             record["error_message"] = error_message
@@ -951,10 +959,17 @@ class VideoStorage:
         """Mark download as in progress."""
         self.update_download_status(slug, DownloadStatus.DOWNLOADING)
 
-    def mark_completed(self, slug: str, local_path: str, file_size: int) -> None:
+    def mark_completed(
+        self,
+        slug: str,
+        local_path: str,
+        file_size: int,
+        audio_path: str | None = None,
+        audio_size: int | None = None,
+    ) -> None:
         """Mark download as completed."""
         self.update_download_status(
-            slug, DownloadStatus.COMPLETED, local_path, file_size
+            slug, DownloadStatus.COMPLETED, local_path, file_size, audio_path, audio_size
         )
 
     def mark_failed(self, slug: str, error_message: str) -> None:
