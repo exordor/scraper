@@ -98,6 +98,8 @@ class ParallelPipeline:
         download_queue_size: int = 10,
         upload_queue_size: int = 20,
         upload_workers: int = 3,
+        max_pending_uploads: int = 50,
+        min_disk_free_gb: float = 5.0,
         delete_after_upload: bool = True,
         delete_only_if_all_success: bool = True,
     ):
@@ -110,6 +112,8 @@ class ParallelPipeline:
             download_queue_size: Max items in download queue (backpressure)
             upload_queue_size: Max items in upload queue
             upload_workers: Number of concurrent upload workers per uploader
+            max_pending_uploads: Max files waiting to be uploaded before pausing downloads
+            min_disk_free_gb: Minimum free disk space in GB before pausing
             delete_after_upload: Delete local files after upload
             delete_only_if_all_success: Only delete if ALL uploads succeed
         """
@@ -119,6 +123,8 @@ class ParallelPipeline:
         self.delete_after_upload = delete_after_upload
         self.delete_only_if_all_success = delete_only_if_all_success
         self.upload_workers = upload_workers
+        self.max_pending_uploads = max_pending_uploads
+        self.min_disk_free_gb = min_disk_free_gb
 
         # Queues
         self.download_queue: asyncio.Queue[DownloadTask | None] = asyncio.Queue(
@@ -138,6 +144,25 @@ class ParallelPipeline:
         # Control
         self._stop_event = asyncio.Event()
 
+    def _get_disk_free_gb(self) -> float:
+        """Get free disk space in GB."""
+        import shutil
+        stat = shutil.disk_usage(self.downloader.output_dir)
+        return stat.free / (1024 ** 3)
+
+    def _get_pause_file(self) -> Path:
+        """Get path to the pause file."""
+        # Pause file is in the project root (parent of output dir)
+        return self.downloader.output_dir.parent / ".pause_downloads"
+
+    def _is_paused(self) -> bool:
+        """Check if downloads are paused via pause file."""
+        return self._get_pause_file().exists()
+
+    def _get_pending_upload_count(self) -> int:
+        """Get count of downloaded files waiting to be uploaded."""
+        return self.stats.downloaded - self.stats.uploaded - self.stats.upload_failed
+
     async def _download_producer(
         self,
         slugs: list[str],
@@ -154,6 +179,46 @@ class ParallelPipeline:
         for i, slug in enumerate(slugs):
             if self._stop_event.is_set():
                 break
+
+            # Check for pause file (external disk monitor can create this)
+            while self._is_paused():
+                logger.info("Downloads paused via pause file. Waiting...")
+                progress.update(
+                    task_id,
+                    description="[yellow]⏸ Downloads paused (disk monitor). Waiting...[/yellow]",
+                )
+                await asyncio.sleep(10)
+
+            # Check disk space before downloading
+            disk_free = self._get_disk_free_gb()
+            if disk_free < self.min_disk_free_gb:
+                logger.warning(
+                    "Low disk space (%.1fGB < %.1fGB). Waiting for uploads...",
+                    disk_free, self.min_disk_free_gb
+                )
+                progress.update(
+                    task_id,
+                    description=f"[yellow]Low disk ({disk_free:.1f}GB). Waiting...[/yellow]",
+                )
+                # Wait for uploads to complete and free up space
+                while self._get_disk_free_gb() < self.min_disk_free_gb:
+                    await asyncio.sleep(10)
+                    if self._get_pending_upload_count() == 0:
+                        break  # No more uploads pending, disk is still low
+
+            # Check pending uploads limit
+            pending = self._get_pending_upload_count()
+            if pending >= self.max_pending_uploads:
+                logger.info(
+                    "Too many pending uploads (%d >= %d). Waiting...",
+                    pending, self.max_pending_uploads
+                )
+                progress.update(
+                    task_id,
+                    description=f"[yellow]Pending uploads: {pending}. Waiting...[/yellow]",
+                )
+                while self._get_pending_upload_count() >= self.max_pending_uploads:
+                    await asyncio.sleep(5)
 
             progress.update(
                 task_id,

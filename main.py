@@ -769,6 +769,14 @@ def parallel(
         int,
         typer.Option("--upload-workers", "-w", help="Number of concurrent upload workers"),
     ] = 3,
+    max_pending: Annotated[
+        int,
+        typer.Option("--max-pending", help="Max pending uploads before pausing downloads"),
+    ] = 50,
+    min_disk_gb: Annotated[
+        float,
+        typer.Option("--min-disk-gb", help="Min free disk space in GB before pausing"),
+    ] = 5.0,
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Enable debug logging"),
@@ -816,6 +824,8 @@ def parallel(
         download_queue_size=queue_size,
         upload_queue_size=queue_size * 2,
         upload_workers=upload_workers,
+        max_pending_uploads=max_pending,
+        min_disk_free_gb=min_disk_gb,
         delete_after_upload=not keep_files,
     )
 
@@ -824,6 +834,8 @@ def parallel(
     console.print(f"[cyan]Uploaders:[/cyan] {', '.join(u.storage_type for u in uploaders_list)}")
     console.print(f"[cyan]Download queue size:[/cyan] {queue_size}")
     console.print(f"[cyan]Upload workers:[/cyan] {upload_workers}")
+    console.print(f"[cyan]Max pending uploads:[/cyan] {max_pending}")
+    console.print(f"[cyan]Min disk free:[/cyan] {min_disk_gb} GB")
     console.print(f"[cyan]Delete after upload:[/cyan] {not keep_files}")
     console.print()
 

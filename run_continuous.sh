@@ -24,7 +24,7 @@ MIN_DISK_FREE="${MIN_DISK_FREE:-15}"    # Minimum % free disk space
 WAIT_LOW_DISK="${WAIT_LOW_DISK:-600}"   # Wait seconds when disk is low
 WAIT_BETWEEN_BATCHES="${WAIT_BETWEEN_BATCHES:-60}"  # Wait between batches
 MAX_RETRIES="${MAX_RETRIES:-3}"         # Max retries per batch
-OUTPUT_DIR=""                            # Output directory for downloads
+OUTPUT_DIR="/root/telegram-upload-service/data/downloads"  # Output directory for downloads
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -108,7 +108,7 @@ run_batch() {
     cd "$SCRIPT_DIR"
 
     # Build command for parallel processing with optimized settings
-    local cmd="uv run python main.py parallel --limit $BATCH_SIZE --queue-size 20 --upload-workers 3 -v"
+    local cmd="uv run python main.py parallel --limit $BATCH_SIZE --queue-size 30 --upload-workers 6 -v"
     if [[ -n "$OUTPUT_DIR" ]]; then
         cmd="$cmd --output $OUTPUT_DIR"
     fi

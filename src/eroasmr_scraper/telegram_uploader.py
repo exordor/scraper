@@ -59,7 +59,8 @@ class TelegramUploader(Uploader):
         Returns:
             Mapped path (or original if no mapping configured)
         """
-        path_str = str(file_path)
+        # Resolve to absolute path for mapping
+        path_str = str(file_path.resolve())
         for local_prefix, container_prefix in self.file_path_map.items():
             if path_str.startswith(local_prefix):
                 return path_str.replace(local_prefix, container_prefix, 1)
@@ -155,6 +156,7 @@ class TelegramUploader(Uploader):
 
         # Map local path to container path if configured
         remote_file_path = self._map_file_path(file_path)
+        print(f"[DEBUG] Path mapping: {file_path} -> {remote_file_path}, file_path_map: {self.file_path_map}")
 
         # Map thumbnail path if provided
         remote_thumbnail_path = None

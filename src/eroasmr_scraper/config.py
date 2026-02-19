@@ -48,8 +48,8 @@ class TelegramConfig(BaseModel):
     caption_template: str = "<b>{title}</b>\n\n{description}\n\nDuration: {duration}"  # Variables: {title}, {slug}, {description}, {duration}
     parse_mode: str = "HTML"
     # Path mapping for Docker integration: local_path -> container_path
-    # Example: {"data/downloads": "/app/data/downloads"}
-    file_path_map: dict[str, str] = {}
+    # Maps downloads to telegram-upload-service container path
+    file_path_map: dict[str, str] = {"/root/telegram-upload-service/data/downloads": "/app/data/downloads"}
 
 
 class Settings(BaseSettings):
