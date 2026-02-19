@@ -38,3 +38,6 @@ Thumbs.db
 
 # Worktrees
 .worktrees/
+
+# logs
+logs/
