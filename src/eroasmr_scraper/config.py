@@ -52,17 +52,48 @@ class TelegramConfig(BaseModel):
     file_path_map: dict[str, str] = {"/root/telegram-upload-service/data/downloads": "/app/data/downloads"}
 
 
+class EroAsmrSiteConfig(BaseModel):
+    """EroAsmr site-specific configuration."""
+
+    enabled: bool = True
+    base_url: str = "https://eroasmr.com"
+    http: HttpConfig = HttpConfig()
+
+
+class ZhumianwangSiteConfig(BaseModel):
+    """Zhumianwang site-specific configuration."""
+
+    enabled: bool = True
+    base_url: str = "https://zhumianwang.com"
+    http: HttpConfig = HttpConfig(base_url="https://zhumianwang.com")
+    # Playwright authentication for download links
+    requires_auth: bool = True
+    cookie_domain: str = ".zhumianwang.com"
+
+
+class SitesConfig(BaseModel):
+    """Multi-site configuration."""
+
+    eroasmr: EroAsmrSiteConfig = EroAsmrSiteConfig()
+    zhumianwang: ZhumianwangSiteConfig = ZhumianwangSiteConfig()
+
+
 class Settings(BaseSettings):
     """Global application settings."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        env_prefix="EROASMR_",
+        env_prefix="SCRAPER_",
         env_nested_delimiter="__",
         extra="ignore",
     )
 
+    # Multi-site configuration
+    sites: SitesConfig = SitesConfig()
+    default_site: str = "eroasmr"
+
+    # Legacy support - these now delegate to sites.eroasmr
     http: HttpConfig = HttpConfig()
     db: DatabaseConfig = DatabaseConfig()
     scraper: ScraperConfig = ScraperConfig()
@@ -70,6 +101,19 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+
+    def get_site_config(self, site_id: str) -> EroAsmrSiteConfig | ZhumianwangSiteConfig:
+        """Get configuration for a specific site.
+
+        Args:
+            site_id: Site identifier (e.g., 'eroasmr', 'zhumianwang')
+
+        Returns:
+            Site configuration object
+        """
+        if site_id == "zhumianwang":
+            return self.sites.zhumianwang
+        return self.sites.eroasmr
 
 
 # Global settings instance
