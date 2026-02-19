@@ -156,7 +156,6 @@ class TelegramUploader(Uploader):
 
         # Map local path to container path if configured
         remote_file_path = self._map_file_path(file_path)
-        print(f"[DEBUG] Path mapping: {file_path} -> {remote_file_path}, file_path_map: {self.file_path_map}")
 
         # Map thumbnail path if provided
         remote_thumbnail_path = None

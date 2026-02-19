@@ -8,7 +8,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/logs/disk_monitor.log"
-PAUSE_FILE="$SCRIPT_DIR/.pause_downloads"
+PAUSE_FILE="/root/telegram-upload-service/data/.pause_downloads"
 
 # Default values
 MIN_FREE_GB="${MIN_FREE_GB:-15}"        # Pause downloads below this
