@@ -1,0 +1,28 @@
+[Unit]
+Description=EroASMR Scraper Pipeline
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/eroasmr-scraper
+Environment="EROASMR_TELEGRAM__TENANT_ID=4d6e8863-4d30-4e65-9455-92b49d21b67c"
+Environment="EROASMR_TELEGRAM__UPLOAD_SERVICE_URL=http://localhost:8000"
+Environment="EROASMR_TELEGRAM__FILE_PATH_MAP={\"data/downloads\": \"/app/data/downloads\"}"
+
+# Run continuous script
+ExecStart=/root/eroasmr-scraper/run_continuous.sh --parallel --batch-size 5
+
+# Restart on failure
+Restart=on-failure
+RestartSec=60
+
+# Logging
+StandardOutput=append:/root/eroasmr-scraper/logs/systemd_stdout.log
+StandardError=append:/root/eroasmr-scraper/logs/systemd_stderr.log
+
+# Resource limits
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target
