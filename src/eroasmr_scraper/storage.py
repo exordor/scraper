@@ -26,13 +26,15 @@ from eroasmr_scraper.models import (
 class VideoStorage:
     """SQLite storage manager for video metadata."""
 
-    def __init__(self, db_path: str | None = None):
+    def __init__(self, db_path: str | None = None, site_id: str = "eroasmr"):
         """Initialize storage.
 
         Args:
             db_path: Path to SQLite database file. Defaults to settings value.
+            site_id: Site identifier for multi-site support
         """
         self.db_path = db_path or settings.db.path
+        self.site_id = site_id
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         # Use check_same_thread=False for thread-safe access in parallel pipeline
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -45,6 +47,7 @@ class VideoStorage:
         self.db["videos"].create(
             columns={
                 "id": int,
+                "site_id": str,
                 "title": str,
                 "slug": str,
                 "video_url": str,
@@ -75,6 +78,7 @@ class VideoStorage:
         self.db["videos"].create_index(["slug"], unique=True, if_not_exists=True)
         self.db["videos"].create_index(["video_url"], unique=True, if_not_exists=True)
         self.db["videos"].create_index(["scraped_at"], if_not_exists=True)
+        self.db["videos"].create_index(["site_id"], if_not_exists=True)
 
         # Tags table
         self.db["tags"].create(
@@ -146,6 +150,7 @@ class VideoStorage:
         self.db["scrape_progress"].create(
             columns={
                 "id": int,
+                "site_id": str,
                 "mode": str,
                 "phase": str,
                 "last_page": int,
@@ -161,6 +166,7 @@ class VideoStorage:
         self.db["failed_urls"].create(
             columns={
                 "id": int,
+                "site_id": str,
                 "url": str,
                 "url_type": str,
                 "error": str,
@@ -175,6 +181,7 @@ class VideoStorage:
         self.db["downloads"].create(
             columns={
                 "slug": str,
+                "site_id": str,
                 "status": str,
                 "local_path": str,
                 "file_size": int,
@@ -186,6 +193,7 @@ class VideoStorage:
             if_not_exists=True,
         )
         self.db["downloads"].create_index(["status"], if_not_exists=True)
+        self.db["downloads"].create_index(["site_id"], if_not_exists=True)
 
         # Storage locations table - track uploaded locations (future extension)
         self.db["storage_locations"].create(
@@ -226,8 +234,11 @@ class VideoStorage:
         """
         records = []
         for v in videos:
+            # Get site_id from video if available, otherwise use storage's site_id
+            video_site_id = getattr(v, 'site_id', self.site_id)
             records.append({
                 "slug": v.slug,
+                "site_id": video_site_id,
                 "title": v.title,
                 "video_url": v.video_url,
                 "thumbnail_url": v.thumbnail_url,
@@ -266,6 +277,8 @@ class VideoStorage:
         Args:
             video: VideoDetail object
         """
+        video_site_id = getattr(video, 'site_id', self.site_id)
+
         # Check if video exists
         if self.video_exists(video.slug):
             # Update existing record
@@ -317,6 +330,7 @@ class VideoStorage:
             self.db["videos"].insert(
                 {
                     "slug": video.slug,
+                    "site_id": video_site_id,
                     "title": video.title,
                     "video_url": video.video_url,
                     "thumbnail_url": video.thumbnail_url,
@@ -338,54 +352,75 @@ class VideoStorage:
                 }
             )
 
-    def video_exists(self, slug: str) -> bool:
+    def video_exists(self, slug: str, site_id: str | None = None) -> bool:
         """Check if video exists in database.
 
         Args:
             slug: Video slug
+            site_id: Optional site filter (uses self.site_id if not provided)
 
         Returns:
             True if video exists
         """
-        rows = list(self.db["videos"].rows_where("slug = ?", [slug], limit=1))
+        filter_site_id = site_id or self.site_id
+        rows = list(self.db["videos"].rows_where(
+            "slug = ? AND site_id = ?",
+            [slug, filter_site_id],
+            limit=1
+        ))
         return len(rows) > 0
 
-    def get_video_by_slug(self, slug: str) -> dict | None:
+    def get_video_by_slug(self, slug: str, site_id: str | None = None) -> dict | None:
         """Get video by slug.
 
         Args:
             slug: Video slug
+            site_id: Optional site filter
 
         Returns:
             Video record or None
         """
-        rows = list(self.db["videos"].rows_where("slug = ?", [slug], limit=1))
+        filter_site_id = site_id or self.site_id
+        rows = list(self.db["videos"].rows_where(
+            "slug = ? AND site_id = ?",
+            [slug, filter_site_id],
+            limit=1
+        ))
         return rows[0] if rows else None
 
-    def get_video_id(self, slug: str) -> int | None:
+    def get_video_id(self, slug: str, site_id: str | None = None) -> int | None:
         """Get video database ID by slug.
 
         Args:
             slug: Video slug
+            site_id: Optional site filter
 
         Returns:
             Video ID or None
         """
-        rows = list(self.db["videos"].rows_where("slug = ?", [slug], select="id", limit=1))
+        filter_site_id = site_id or self.site_id
+        rows = list(self.db["videos"].rows_where(
+            "slug = ? AND site_id = ?",
+            [slug, filter_site_id],
+            select="id",
+            limit=1
+        ))
         return rows[0]["id"] if rows else None
 
-    def get_videos_without_details(self, limit: int = 100) -> list[dict]:
+    def get_videos_without_details(self, limit: int = 100, site_id: str | None = None) -> list[dict]:
         """Get videos that haven't had detail page scraped.
 
         Args:
             limit: Maximum number to return
+            site_id: Optional site filter
 
         Returns:
             List of video records
         """
+        filter_site_id = site_id or self.site_id
         return list(
             self.db["videos"]
-            .rows_where("detail_scraped_at IS NULL", limit=limit)
+            .rows_where("detail_scraped_at IS NULL AND site_id = ?", [filter_site_id], limit=limit)
         )
 
     def update_video_duration(
@@ -431,9 +466,14 @@ class VideoStorage:
                 updated += 1
         return updated
 
-    def get_videos_count(self) -> int:
-        """Get total video count."""
-        return self.db["videos"].count
+    def get_videos_count(self, site_id: str | None = None) -> int:
+        """Get total video count.
+
+        Args:
+            site_id: Optional site filter
+        """
+        filter_site_id = site_id or self.site_id
+        return self.db["videos"].count_where("site_id = ?", [filter_site_id])
 
     # ============================================
     # Tag operations
@@ -591,9 +631,11 @@ class VideoStorage:
         Args:
             progress: ScrapeProgress object
         """
+        progress_site_id = getattr(progress, 'site_id', self.site_id)
         self.db["scrape_progress"].upsert(
             {
                 "id": 1,
+                "site_id": progress_site_id,
                 "mode": progress.mode,
                 "phase": progress.phase,
                 "last_page": progress.last_page,
@@ -604,15 +646,23 @@ class VideoStorage:
             pk="id",
         )
 
-    def get_progress(self) -> ScrapeProgress | None:
+    def get_progress(self, site_id: str | None = None) -> ScrapeProgress | None:
         """Get current scraping progress.
+
+        Args:
+            site_id: Optional site filter
 
         Returns:
             ScrapeProgress or None
         """
+        filter_site_id = site_id or self.site_id
         try:
             row = self.db["scrape_progress"].get(1)
+            # Check if site_id matches
+            if row.get("site_id") and row["site_id"] != filter_site_id:
+                return None
             return ScrapeProgress(
+                site_id=row.get("site_id", filter_site_id),
                 mode=row["mode"],
                 phase=row["phase"],
                 last_page=row["last_page"],
@@ -640,8 +690,10 @@ class VideoStorage:
         Args:
             failed: FailedUrl object
         """
+        failed_site_id = getattr(failed, 'site_id', self.site_id)
         self.db["failed_urls"].insert(
             {
+                "site_id": failed_site_id,
                 "url": failed.url,
                 "url_type": failed.url_type,
                 "error": failed.error,
@@ -650,18 +702,20 @@ class VideoStorage:
             }
         )
 
-    def get_failed_urls(self, limit: int = 100) -> list[dict]:
+    def get_failed_urls(self, limit: int = 100, site_id: str | None = None) -> list[dict]:
         """Get failed URLs for retry.
 
         Args:
             limit: Maximum number to return
+            site_id: Optional site filter
 
         Returns:
             List of failed URL records
         """
+        filter_site_id = site_id or self.site_id
         return list(
             self.db["failed_urls"]
-            .rows_where("retry_count < 3", limit=limit, order_by="created_at")
+            .rows_where("retry_count < 3 AND site_id = ?", [filter_site_id], limit=limit, order_by="created_at")
         )
 
     def increment_retry_count(self, url: str) -> None:
@@ -679,22 +733,28 @@ class VideoStorage:
     # Statistics
     # ============================================
 
-    def get_stats(self) -> dict[str, Any]:
+    def get_stats(self, site_id: str | None = None) -> dict[str, Any]:
         """Get database statistics.
+
+        Args:
+            site_id: Optional site filter
 
         Returns:
             Dictionary of statistics
         """
+        filter_site_id = site_id or self.site_id
         return {
-            "videos": self.db["videos"].count,
+            "site_id": filter_site_id,
+            "videos": self.db["videos"].count_where("site_id = ?", [filter_site_id]),
             "videos_with_details": self.db["videos"].count_where(
-                "detail_scraped_at IS NOT NULL"
+                "detail_scraped_at IS NOT NULL AND site_id = ?",
+                [filter_site_id]
             ),
             "tags": self.db["tags"].count,
             "categories": self.db["categories"].count,
             "video_tags": self.db["video_tags"].count,
             "video_related": self.db["video_related"].count,
-            "failed_urls": self.db["failed_urls"].count,
+            "failed_urls": self.db["failed_urls"].count_where("site_id = ?", [filter_site_id]),
         }
 
     # ============================================
@@ -747,33 +807,40 @@ class VideoStorage:
     # ============================================
 
     def get_pending_downloads(
-        self, limit: int | None = None, include_failed: bool = False
+        self, limit: int | None = None, include_failed: bool = False, site_id: str | None = None
     ) -> list[str]:
         """Get slugs of videos pending download.
 
         Args:
             limit: Maximum number to return
             include_failed: If True, also include failed downloads for retry
+            site_id: Optional site filter
 
         Returns:
             List of video slugs
         """
-        # Get all video slugs ordered by id (insertion order)
+        filter_site_id = site_id or self.site_id
+
+        # Get all video slugs for this site ordered by id (insertion order)
         all_slugs = [
             row["slug"]
-            for row in self.db["videos"].rows_where(order_by="id")
+            for row in self.db["videos"].rows_where("site_id = ?", [filter_site_id], order_by="id")
         ]
 
-        # Get already downloaded slugs
+        # Get already downloaded slugs for this site
         if include_failed:
             downloaded_slugs = set(
                 row["slug"]
                 for row in self.db["downloads"].rows_where(
-                    "status IN ('completed', 'downloading')"
+                    "status IN ('completed', 'downloading') AND site_id = ?",
+                    [filter_site_id]
                 )
             )
         else:
-            downloaded_slugs = set(row["slug"] for row in self.db["downloads"].rows)
+            downloaded_slugs = set(
+                row["slug"]
+                for row in self.db["downloads"].rows_where("site_id = ?", [filter_site_id])
+            )
 
         # Filter and limit
         pending = [s for s in all_slugs if s not in downloaded_slugs]
@@ -793,15 +860,18 @@ class VideoStorage:
         rows = list(self.db["downloads"].rows_where("slug = ?", [slug], limit=1))
         return rows[0] if rows else None
 
-    def init_download(self, slug: str) -> None:
+    def init_download(self, slug: str, site_id: str | None = None) -> None:
         """Initialize a download record (if not exists).
 
         Args:
             slug: Video slug
+            site_id: Optional site identifier
         """
+        download_site_id = site_id or self.site_id
         self.db["downloads"].upsert(
             {
                 "slug": slug,
+                "site_id": download_site_id,
                 "status": DownloadStatus.PENDING.value,
             },
             pk="slug",
@@ -814,6 +884,7 @@ class VideoStorage:
         local_path: str | None = None,
         file_size: int | None = None,
         error_message: str | None = None,
+        site_id: str | None = None,
     ) -> None:
         """Update download status.
 
@@ -823,9 +894,12 @@ class VideoStorage:
             local_path: Local file path (on completion)
             file_size: File size in bytes (on completion)
             error_message: Error message (on failure)
+            site_id: Optional site identifier
         """
+        download_site_id = site_id or self.site_id
         record: dict[str, Any] = {
             "slug": slug,
+            "site_id": download_site_id,
             "status": status.value,
         }
 
@@ -853,18 +927,22 @@ class VideoStorage:
         """Mark download as failed."""
         self.update_download_status(slug, DownloadStatus.FAILED, error_message=error_message)
 
-    def get_download_stats(self) -> dict[str, int]:
+    def get_download_stats(self, site_id: str | None = None) -> dict[str, int]:
         """Get download statistics.
+
+        Args:
+            site_id: Optional site filter
 
         Returns:
             Dictionary with counts by status
         """
+        filter_site_id = site_id or self.site_id
         stats = {
-            "total_videos": self.db["videos"].count,
-            "pending": self.db["downloads"].count_where("status = 'pending'"),
-            "downloading": self.db["downloads"].count_where("status = 'downloading'"),
-            "completed": self.db["downloads"].count_where("status = 'completed'"),
-            "failed": self.db["downloads"].count_where("status = 'failed'"),
+            "total_videos": self.db["videos"].count_where("site_id = ?", [filter_site_id]),
+            "pending": self.db["downloads"].count_where("status = 'pending' AND site_id = ?", [filter_site_id]),
+            "downloading": self.db["downloads"].count_where("status = 'downloading' AND site_id = ?", [filter_site_id]),
+            "completed": self.db["downloads"].count_where("status = 'completed' AND site_id = ?", [filter_site_id]),
+            "failed": self.db["downloads"].count_where("status = 'failed' AND site_id = ?", [filter_site_id]),
         }
         stats["not_started"] = stats["total_videos"] - sum(
             [stats["pending"], stats["downloading"], stats["completed"], stats["failed"]]
