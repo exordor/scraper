@@ -4,7 +4,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 from rich.console import Console
@@ -26,12 +26,19 @@ from eroasmr_scraper.scraper import EroAsmrScraper
 from eroasmr_scraper.storage import VideoStorage
 from eroasmr_scraper.telegram_uploader import TelegramUploader
 from eroasmr_scraper.uploader import MockUploader, Uploader
+from eroasmr_scraper.factory import ScraperFactory
 
 app = typer.Typer(
     name="eroasmr-scraper",
     help="Video metadata scraper for eroasmr.com with Neo4j export support",
 )
 console = Console()
+
+# Site ID type for CLI options
+SiteChoice = Annotated[
+    Literal["eroasmr", "zhumianwang"],
+    typer.Option("--site", "-s", help="Site to scrape (eroasmr, zhumianwang)"),
+]
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -62,6 +69,29 @@ def main(
 
 
 @app.command()
+def sites() -> None:
+    """List available sites."""
+    table = Table(title="Available Sites")
+    table.add_column("Site ID", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Status", style="yellow")
+
+    # Check each site
+    sites_info = [
+        ("eroasmr", "EroAsmr", settings.sites.eroasmr.enabled),
+        ("zhumianwang", "助眠网", settings.sites.zhumianwang.enabled),
+    ]
+
+    for site_id, name, enabled in sites_info:
+        status = "[green]enabled[/green]" if enabled else "[red]disabled[/red]"
+        table.add_row(site_id, name, status)
+
+    console.print(table)
+    console.print()
+    console.print(f"[dim]Default site: {settings.default_site}[/dim]")
+
+
+@app.command()
 def full(
     pages: Annotated[
         str | None,
@@ -75,6 +105,7 @@ def full(
         bool,
         typer.Option("--no-details", help="Skip detail page scraping"),
     ] = False,
+    site: SiteChoice = "eroasmr",  # type: ignore
     verbose: Annotated[
         bool,
         typer.Option("--verbose", help="Enable debug logging"),
@@ -83,6 +114,7 @@ def full(
     """Full scrape - scrape all pages.
 
     Use --reverse to scrape from oldest to newest (starts from last page).
+    Use --site to specify the site (eroasmr, zhumianwang).
     """
     setup_logging(verbose)
 
@@ -99,7 +131,16 @@ def full(
             start_page = int(pages)
             end_page = start_page
 
-    scraper = EroAsmrScraper()
+    # Create storage and scraper for the selected site
+    storage = VideoStorage(site_id=site)
+
+    if site == "zhumianwang":
+        # Import zhumianwang scraper when available
+        console.print("[yellow]Note: zhumianwang scraper implementation pending[/yellow]")
+        console.print("The parser has been created but the scraper class needs to be implemented.")
+        raise typer.Exit(1)
+    else:
+        scraper = EroAsmrScraper(storage=storage)
 
     async def run() -> None:
         with Progress(
@@ -243,15 +284,18 @@ def retry(
 
 
 @app.command()
-def stats() -> None:
+def stats(
+    site: SiteChoice = "eroasmr",  # type: ignore
+) -> None:
     """Show database statistics."""
-    storage = VideoStorage()
+    storage = VideoStorage(site_id=site)
     stats = storage.get_stats()
 
-    table = Table(title="Database Statistics")
+    table = Table(title=f"Database Statistics [{site}]")
     table.add_column("Item", style="cyan")
     table.add_column("Count", justify="right", style="green")
 
+    table.add_row("Site ID", stats.get("site_id", site))
     table.add_row("Total Videos", str(stats["videos"]))
     table.add_row("Videos with Details", str(stats["videos_with_details"]))
     table.add_row("Tags", str(stats["tags"]))
