@@ -31,6 +31,7 @@ class DownloadTask:
     slug: str
     file_path: Path
     file_size: int
+    thumbnail_path: Path | None = None
     error: str | None = None
 
 
@@ -41,6 +42,7 @@ class UploadTask:
     slug: str
     file_path: Path
     uploader: Uploader
+    thumbnail_path: Path | None = None
 
 
 @dataclass
@@ -95,6 +97,7 @@ class ParallelPipeline:
         uploaders: list[Uploader],
         download_queue_size: int = 10,
         upload_queue_size: int = 20,
+        upload_workers: int = 3,
         delete_after_upload: bool = True,
         delete_only_if_all_success: bool = True,
     ):
@@ -106,6 +109,7 @@ class ParallelPipeline:
             uploaders: List of Uploader instances
             download_queue_size: Max items in download queue (backpressure)
             upload_queue_size: Max items in upload queue
+            upload_workers: Number of concurrent upload workers per uploader
             delete_after_upload: Delete local files after upload
             delete_only_if_all_success: Only delete if ALL uploads succeed
         """
@@ -114,6 +118,7 @@ class ParallelPipeline:
         self.uploaders = [u for u in uploaders if u.is_ready()]
         self.delete_after_upload = delete_after_upload
         self.delete_only_if_all_success = delete_only_if_all_success
+        self.upload_workers = upload_workers
 
         # Queues
         self.download_queue: asyncio.Queue[DownloadTask | None] = asyncio.Queue(
@@ -168,10 +173,18 @@ class ParallelPipeline:
                 file_path = self.downloader.output_dir / f"{slug}.mp4"
                 file_size = file_path.stat().st_size if file_path.exists() else 0
 
+                # Also download thumbnail
+                thumbnail_path = await loop.run_in_executor(
+                    None,
+                    self.downloader.download_thumbnail,
+                    slug,
+                )
+
                 task = DownloadTask(
                     slug=slug,
                     file_path=file_path,
                     file_size=file_size,
+                    thumbnail_path=thumbnail_path,
                 )
 
                 await self.download_queue.put(task)
@@ -205,9 +218,10 @@ class ParallelPipeline:
             task = await self.download_queue.get()
 
             if task is None:
-                # End of downloads, signal end to uploaders
+                # End of downloads, signal end to all upload workers
                 for _ in self.uploaders:
-                    await self.upload_queue.put(None)
+                    for _ in range(self.upload_workers):
+                        await self.upload_queue.put(None)
                 break
 
             if task.error:
@@ -219,6 +233,7 @@ class ParallelPipeline:
                     slug=task.slug,
                     file_path=task.file_path,
                     uploader=uploader,
+                    thumbnail_path=task.thumbnail_path,
                 )
                 await self.upload_queue.put(upload_task)
 
@@ -253,13 +268,15 @@ class ParallelPipeline:
             )
 
             try:
-                # Run upload in thread pool (sync function)
+                # Run upload in thread pool (sync function with kwargs)
                 loop = asyncio.get_event_loop()
                 result = await loop.run_in_executor(
                     None,
-                    uploader.upload,
-                    task.file_path,
-                    task.slug,
+                    lambda: uploader.upload(
+                        task.file_path,
+                        task.slug,
+                        thumbnail_path=task.thumbnail_path,
+                    ),
                 )
 
                 # Store result
@@ -327,14 +344,17 @@ class ParallelPipeline:
                     )
 
             # Check if we can delete the file
-            await self._maybe_delete_file(task.slug, task.file_path)
+            await self._maybe_delete_file(task.slug, task.file_path, task.thumbnail_path)
 
-    async def _maybe_delete_file(self, slug: str, file_path: Path) -> None:
+    async def _maybe_delete_file(
+        self, slug: str, file_path: Path, thumbnail_path: Path | None = None
+    ) -> None:
         """Delete file if all uploads are complete and successful.
 
         Args:
             slug: Video slug
             file_path: Path to the file
+            thumbnail_path: Path to the thumbnail file (optional)
         """
         if not self.delete_after_upload:
             return
@@ -360,6 +380,14 @@ class ParallelPipeline:
                     logger.info("Deleted local file: %s", file_path)
                 except OSError as e:
                     logger.warning("Failed to delete %s: %s", file_path, e)
+
+            # Also delete thumbnail if exists
+            if should_delete and thumbnail_path and thumbnail_path.exists():
+                try:
+                    thumbnail_path.unlink()
+                    logger.debug("Deleted thumbnail: %s", thumbnail_path)
+                except OSError as e:
+                    logger.warning("Failed to delete thumbnail %s: %s", thumbnail_path, e)
 
     async def run(
         self,
@@ -430,17 +458,18 @@ class ParallelPipeline:
                 asyncio.create_task(self._download_to_upload_dispatcher())
             )
 
-            # Upload consumers (one per uploader)
+            # Upload consumers (multiple workers per uploader for parallel uploads)
             for uploader in self.uploaders:
-                tasks.append(
-                    asyncio.create_task(
-                        self._upload_consumer(
-                            uploader,
-                            progress,
-                            ul_tasks[uploader.storage_type],
+                for worker_id in range(self.upload_workers):
+                    tasks.append(
+                        asyncio.create_task(
+                            self._upload_consumer(
+                                uploader,
+                                progress,
+                                ul_tasks[uploader.storage_type],
+                            )
                         )
                     )
-                )
 
             # Wait for all tasks
             await asyncio.gather(*tasks)

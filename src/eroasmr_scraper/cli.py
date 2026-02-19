@@ -764,7 +764,11 @@ def parallel(
     queue_size: Annotated[
         int,
         typer.Option("--queue-size", help="Max items in download queue"),
-    ] = 10,
+    ] = 20,
+    upload_workers: Annotated[
+        int,
+        typer.Option("--upload-workers", "-w", help="Number of concurrent upload workers"),
+    ] = 3,
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Enable debug logging"),
@@ -783,7 +787,8 @@ def parallel(
         eroasmr-scraper parallel                    # Process all pending
         eroasmr-scraper parallel --limit 100        # Process 100 videos
         eroasmr-scraper parallel --keep             # Keep local files
-        eroasmr-scraper parallel --queue-size 20    # Larger buffer
+        eroasmr-scraper parallel --queue-size 20    # Larger download buffer
+        eroasmr-scraper parallel --upload-workers 5 # 5 concurrent uploads
     """
     setup_logging(verbose)
 
@@ -809,13 +814,16 @@ def parallel(
         downloader=downloader,
         uploaders=uploaders_list,
         download_queue_size=queue_size,
+        upload_queue_size=queue_size * 2,
+        upload_workers=upload_workers,
         delete_after_upload=not keep_files,
     )
 
     # Show configuration
     console.print(f"[cyan]Output directory:[/cyan] {output_dir}")
     console.print(f"[cyan]Uploaders:[/cyan] {', '.join(u.storage_type for u in uploaders_list)}")
-    console.print(f"[cyan]Queue size:[/cyan] {queue_size}")
+    console.print(f"[cyan]Download queue size:[/cyan] {queue_size}")
+    console.print(f"[cyan]Upload workers:[/cyan] {upload_workers}")
     console.print(f"[cyan]Delete after upload:[/cyan] {not keep_files}")
     console.print()
 

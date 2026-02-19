@@ -20,6 +20,7 @@ from rich.table import Table
 from eroasmr_scraper import __version__
 from eroasmr_scraper.config import settings
 from eroasmr_scraper.downloader import VideoDownloader
+from eroasmr_scraper.parallel_pipeline import ParallelPipeline
 from eroasmr_scraper.pipeline import DownloadUploadPipeline
 from eroasmr_scraper.scraper import EroAsmrScraper
 from eroasmr_scraper.storage import VideoStorage
@@ -740,6 +741,113 @@ def pipeline(
     console.print(f"  Upload partial: {stats['upload_partial']}")
     console.print(f"  Upload failed: {stats['upload_failed']}")
     console.print(f"  Download failed: {stats['download_failed']}")
+
+
+@app.command()
+def parallel(
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output directory for videos"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", "-n", help="Maximum number of videos to process"),
+    ] = None,
+    retry: Annotated[
+        bool,
+        typer.Option("--retry", help="Retry failed downloads"),
+    ] = False,
+    keep_files: Annotated[
+        bool,
+        typer.Option("--keep", "-k", help="Keep local files after upload"),
+    ] = False,
+    queue_size: Annotated[
+        int,
+        typer.Option("--queue-size", help="Max items in download queue"),
+    ] = 20,
+    upload_workers: Annotated[
+        int,
+        typer.Option("--upload-workers", "-w", help="Number of concurrent upload workers"),
+    ] = 3,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Enable debug logging"),
+    ] = False,
+) -> None:
+    """Run parallel download-upload pipeline.
+
+    Downloads and uploads run concurrently:
+    - Downloader continuously downloads videos
+    - Uploaders continuously upload completed downloads (in parallel)
+    - Files are deleted after successful uploads
+
+    This is more efficient than sequential pipeline for large batches.
+
+    Examples:
+        python main.py parallel                    # Process all pending
+        python main.py parallel --limit 100        # Process 100 videos
+        python main.py parallel --keep             # Keep local files
+        python main.py parallel --queue-size 20    # Larger download buffer
+        python main.py parallel --upload-workers 5 # 5 concurrent uploads
+    """
+    setup_logging(verbose)
+
+    output_dir = output or Path("data/downloads")
+    archive_file = Path("data/download_archive.txt")
+
+    storage = VideoStorage()
+    downloader = VideoDownloader(
+        storage=storage,
+        output_dir=output_dir,
+        archive_file=archive_file,
+    )
+
+    # Get configured uploaders
+    uploaders_list = _get_uploaders()
+
+    if not uploaders_list:
+        console.print("[yellow]No uploaders configured. Using mock uploader for testing.[/yellow]")
+
+    # Create parallel pipeline
+    pipeline_instance = ParallelPipeline(
+        storage=storage,
+        downloader=downloader,
+        uploaders=uploaders_list,
+        download_queue_size=queue_size,
+        upload_queue_size=queue_size * 2,
+        upload_workers=upload_workers,
+        delete_after_upload=not keep_files,
+    )
+
+    # Show configuration
+    console.print(f"[cyan]Output directory:[/cyan] {output_dir}")
+    console.print(f"[cyan]Uploaders:[/cyan] {', '.join(u.storage_type for u in uploaders_list)}")
+    console.print(f"[cyan]Download queue size:[/cyan] {queue_size}")
+    console.print(f"[cyan]Upload workers:[/cyan] {upload_workers}")
+    console.print(f"[cyan]Delete after upload:[/cyan] {not keep_files}")
+    console.print()
+
+    # Check uploader status
+    for uploader in uploaders_list:
+        ready = uploader.is_ready()
+        icon = "[green]✓[/green]" if ready else "[red]✗[/red]"
+        console.print(f"  {icon} {uploader.storage_type}: {'ready' if ready else 'not configured'}")
+
+    console.print()
+
+    # Run pipeline
+    import asyncio
+    stats = asyncio.run(pipeline_instance.run(limit=limit, retry_failed=retry))
+
+    # Show summary
+    console.print()
+    console.print("[green]Parallel pipeline complete![/green]")
+    console.print(f"  Total: {stats['total']}")
+    console.print(f"  Downloaded: {stats['downloaded']}")
+    console.print(f"  Download failed: {stats['download_failed']}")
+    console.print(f"  Uploaded: {stats['uploaded']}")
+    console.print(f"  Upload failed: {stats['upload_failed']}")
+    console.print(f"  Files deleted: {stats['files_deleted']}")
 
 
 @app.command()

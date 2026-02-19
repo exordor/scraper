@@ -107,8 +107,8 @@ run_batch() {
 
     cd "$SCRIPT_DIR"
 
-    # Build command with optional output directory
-    local cmd="uv run python main.py pipeline --limit $BATCH_SIZE -v"
+    # Build command for parallel processing with optimized settings
+    local cmd="uv run python main.py parallel --limit $BATCH_SIZE --queue-size 20 --upload-workers 3 -v"
     if [[ -n "$OUTPUT_DIR" ]]; then
         cmd="$cmd --output $OUTPUT_DIR"
     fi
