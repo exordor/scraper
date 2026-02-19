@@ -2,7 +2,9 @@
 
 import logging
 import random
+import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,6 +22,16 @@ from eroasmr_scraper.storage import VideoStorage
 from eroasmr_scraper.uploader import UploadResult, Uploader
 
 logger = logging.getLogger(__name__)
+
+
+def get_disk_usage(path: Path) -> dict[str, int]:
+    """Get disk usage statistics for the given path.
+
+    Returns:
+        Dict with 'total', 'used', 'free' bytes
+    """
+    usage = shutil.disk_usage(path)
+    return {"total": usage.total, "used": usage.used, "free": usage.free}
 
 
 @dataclass
@@ -82,6 +94,9 @@ class DownloadUploadPipeline:
         uploaders: list[Uploader],
         delete_after_upload: bool = True,
         delete_only_if_all_success: bool = True,
+        min_free_space_gb: float = 5.0,
+        max_disk_usage_percent: float = 90.0,
+        max_pending_files: int = 3,
     ):
         """Initialize the pipeline.
 
@@ -91,12 +106,18 @@ class DownloadUploadPipeline:
             uploaders: List of Uploader instances for uploading to different platforms
             delete_after_upload: Whether to delete local files after upload
             delete_only_if_all_success: If True, only delete when ALL uploads succeed
+            min_free_space_gb: Minimum free space in GB before pausing downloads
+            max_disk_usage_percent: Max disk usage percentage before pausing downloads
+            max_pending_files: Max files waiting for upload before pausing downloads
         """
         self.storage = storage
         self.downloader = downloader
         self.uploaders = uploaders
         self.delete_after_upload = delete_after_upload
         self.delete_only_if_all_success = delete_only_if_all_success
+        self.min_free_space_gb = min_free_space_gb
+        self.max_disk_usage_percent = max_disk_usage_percent
+        self.max_pending_files = max_pending_files
 
         # Filter out uploaders that are not ready
         self._active_uploaders = [u for u in uploaders if u.is_ready()]
@@ -106,6 +127,39 @@ class DownloadUploadPipeline:
             logger.warning(
                 "%d uploader(s) skipped due to missing configuration", skipped
             )
+
+    def _check_disk_space(self) -> tuple[bool, str]:
+        """Check if there's enough disk space to continue downloading.
+
+        Returns:
+            Tuple of (can_continue, reason_if_not)
+        """
+        try:
+            usage = get_disk_usage(self.downloader.output_dir)
+            free_gb = usage["free"] / (1024**3)
+            usage_percent = (usage["used"] / usage["total"]) * 100
+
+            if free_gb < self.min_free_space_gb:
+                return False, f"Low disk space: {free_gb:.1f}GB free (min: {self.min_free_space_gb}GB)"
+
+            if usage_percent > self.max_disk_usage_percent:
+                return False, f"Disk usage too high: {usage_percent:.1f}% (max: {self.max_disk_usage_percent}%)"
+
+            return True, f"Disk OK: {free_gb:.1f}GB free, {usage_percent:.1f}% used"
+        except Exception as e:
+            logger.warning("Failed to check disk space: %s", e)
+            return True, "Disk check failed, continuing"
+
+    def _count_pending_files(self) -> int:
+        """Count files in download directory waiting to be processed."""
+        try:
+            output_dir = self.downloader.output_dir
+            if not output_dir.exists():
+                return 0
+            # Count video files (excluding thumbnails)
+            return len(list(output_dir.glob("*.mp4"))) + len(list(output_dir.glob("*.mp3")))
+        except Exception:
+            return 0
 
     def _upload_to_all(
         self, file_path: Path, slug: str, thumbnail_path: Path | None = None
@@ -293,7 +347,7 @@ class DownloadUploadPipeline:
         retry_failed: bool = False,
         delay: tuple[float, float] = (2.0, 4.0),
     ) -> dict[str, int]:
-        """Process all pending videos through the pipeline.
+        """Process all pending videos through the pipeline (sequential mode).
 
         Args:
             limit: Maximum number of videos to process
@@ -314,6 +368,7 @@ class DownloadUploadPipeline:
             "upload_partial": 0,
             "upload_failed": 0,
             "download_failed": 0,
+            "disk_space_paused": 0,
         }
 
         if not pending:
@@ -341,6 +396,22 @@ class DownloadUploadPipeline:
                     description=f"[cyan]{slug[:35]}[/cyan]",
                     completed=i - 1,
                 )
+
+                # Check disk space before downloading
+                can_continue, disk_status = self._check_disk_space()
+                if not can_continue:
+                    logger.warning("Pausing due to disk space: %s", disk_status)
+                    stats["disk_space_paused"] += 1
+                    progress.update(
+                        task,
+                        description=f"[yellow]⏸[/yellow] Disk full: {disk_status[:30]}",
+                    )
+                    # Wait and retry disk check
+                    time.sleep(30)
+                    can_continue, _ = self._check_disk_space()
+                    if not can_continue:
+                        logger.error("Disk still full, skipping %s", slug)
+                        continue
 
                 result = self.process_video(slug)
 
@@ -390,6 +461,239 @@ class DownloadUploadPipeline:
         )
 
         return stats
+
+    def process_all_parallel(
+        self,
+        limit: int | None = None,
+        retry_failed: bool = False,
+        delay: tuple[float, float] = (2.0, 4.0),
+        max_workers: int = 2,
+    ) -> dict[str, int]:
+        """Process all pending videos with parallel uploads.
+
+        This method downloads videos sequentially but uploads in parallel
+        using background threads, preventing disk space issues.
+
+        Args:
+            limit: Maximum number of videos to process
+            retry_failed: If True, also retry failed downloads
+            delay: (min, max) seconds to wait between downloads
+            max_workers: Maximum number of parallel upload workers
+
+        Returns:
+            Statistics dict with counts
+        """
+        pending = self.storage.get_pending_downloads(
+            limit=limit, include_failed=retry_failed
+        )
+
+        stats = {
+            "total": len(pending),
+            "downloaded": 0,
+            "upload_success": 0,
+            "upload_partial": 0,
+            "upload_failed": 0,
+            "download_failed": 0,
+            "disk_space_paused": 0,
+        }
+
+        if not pending:
+            logger.info("No pending videos to process")
+            return stats
+
+        logger.info(
+            "Starting parallel pipeline for %d videos with %d uploaders, %d workers",
+            len(pending),
+            len(self._active_uploaders),
+            max_workers,
+        )
+
+        # Track pending uploads
+        pending_uploads: list[tuple[str, Path, Path | None, bool]] = []  # (slug, video_path, thumbnail_path, has_audio)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            upload_futures: dict = {}  # future -> (slug, is_audio)
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+            ) as progress:
+                task = progress.add_task("Processing...", total=len(pending))
+
+                for i, slug in enumerate(pending, 1):
+                    # Check disk space and pending files
+                    can_continue, disk_status = self._check_disk_space()
+                    pending_count = self._count_pending_files()
+
+                    if not can_continue or pending_count > self.max_pending_files:
+                        reason = disk_status if not can_continue else f"Too many pending files: {pending_count}"
+                        logger.warning("Waiting for uploads: %s", reason)
+                        stats["disk_space_paused"] += 1
+
+                        # Wait for some uploads to complete
+                        wait_start = time.time()
+                        while (not can_continue or self._count_pending_files() > self.max_pending_files // 2):
+                            if time.time() - wait_start > 300:  # 5 minute timeout
+                                logger.error("Timeout waiting for disk space")
+                                break
+                            time.sleep(10)
+                            can_continue, _ = self._check_disk_space()
+
+                    progress.update(
+                        task,
+                        description=f"[cyan]DL: {slug[:30]}[/cyan]",
+                        completed=i - 1,
+                    )
+
+                    # Download video
+                    result = self.process_video(slug, include_audio=True)
+
+                    if result.downloaded:
+                        stats["downloaded"] += 1
+
+                        # Get file paths
+                        file_path = self.downloader.output_dir / f"{slug}.mp4"
+                        audio_path = self.downloader.output_dir / f"{slug}.mp3"
+                        thumbnail_path = self.downloader.output_dir / f"{slug}_thumb.jpg"
+
+                        # Submit upload tasks to background threads
+                        if file_path.exists():
+                            future = executor.submit(
+                                self._upload_and_cleanup,
+                                slug,
+                                file_path,
+                                thumbnail_path if thumbnail_path.exists() else None,
+                                False,  # is_audio
+                            )
+                            upload_futures[future] = (slug, False)
+
+                        # Also upload audio if present
+                        if audio_path.exists():
+                            future = executor.submit(
+                                self._upload_and_cleanup,
+                                f"{slug}_audio",
+                                audio_path,
+                                None,
+                                True,  # is_audio
+                            )
+                            upload_futures[future] = (slug, True)
+
+                        progress.update(
+                            task,
+                            description=f"[green]↑[/green] {slug[:30]} (uploading...)",
+                        )
+                    else:
+                        stats["download_failed"] += 1
+                        progress.update(
+                            task,
+                            description=f"[red]✗[/red] {slug[:30]}: {result.download_error}",
+                        )
+
+                    # Collect completed uploads
+                    done_futures = [f for f in upload_futures if f.done()]
+                    for future in done_futures:
+                        slug_key, is_audio = upload_futures.pop(future)
+                        try:
+                            upload_results, deleted = future.result()
+                            if not is_audio:  # Only count video uploads in stats
+                                successful = sum(1 for r in upload_results.values() if r.success)
+                                total = len(upload_results)
+                                if successful == total and total > 0:
+                                    stats["upload_success"] += 1
+                                elif successful > 0:
+                                    stats["upload_partial"] += 1
+                                else:
+                                    stats["upload_failed"] += 1
+                        except Exception as e:
+                            logger.error("Upload task failed for %s: %s", slug_key, e)
+                            if not is_audio:
+                                stats["upload_failed"] += 1
+
+                    # Apply delay between downloads
+                    if i < len(pending):
+                        wait_time = random.uniform(delay[0], delay[1])
+                        time.sleep(wait_time)
+
+                # Wait for all remaining uploads to complete
+                progress.update(task, description="[yellow]Waiting for uploads...[/yellow]")
+
+                for future in as_completed(upload_futures):
+                    slug_key, is_audio = upload_futures[future]
+                    try:
+                        upload_results, deleted = future.result()
+                        if not is_audio:
+                            successful = sum(1 for r in upload_results.values() if r.success)
+                            total = len(upload_results)
+                            if successful == total and total > 0:
+                                stats["upload_success"] += 1
+                            elif successful > 0:
+                                stats["upload_partial"] += 1
+                            else:
+                                stats["upload_failed"] += 1
+                    except Exception as e:
+                        logger.error("Upload task failed for %s: %s", slug_key, e)
+                        if not is_audio:
+                            stats["upload_failed"] += 1
+
+                progress.update(task, completed=len(pending))
+
+        logger.info(
+            "Parallel pipeline complete: %d downloaded, %d uploaded, %d partial, %d failed",
+            stats["downloaded"],
+            stats["upload_success"],
+            stats["upload_partial"],
+            stats["upload_failed"],
+        )
+
+        return stats
+
+    def _upload_and_cleanup(
+        self,
+        slug: str,
+        file_path: Path,
+        thumbnail_path: Path | None,
+        is_audio: bool,
+    ) -> tuple[dict[str, UploadResult], bool]:
+        """Upload file and clean up after successful upload.
+
+        This method is designed to run in a background thread.
+
+        Args:
+            slug: Video slug
+            file_path: Path to the file to upload
+            thumbnail_path: Path to thumbnail (optional)
+            is_audio: Whether this is an audio file
+
+        Returns:
+            Tuple of (upload_results, file_deleted)
+        """
+        upload_results = self._upload_to_all(file_path, slug, thumbnail_path=thumbnail_path)
+
+        # Record uploads
+        self._record_uploads(slug, upload_results)
+
+        # Clean up if appropriate
+        deleted = False
+        if self._should_delete_local(upload_results):
+            try:
+                file_path.unlink()
+                deleted = True
+                logger.info("Deleted local file: %s", file_path)
+            except OSError as e:
+                logger.warning("Failed to delete local file %s: %s", file_path, e)
+
+            # Also delete thumbnail
+            if thumbnail_path and thumbnail_path.exists():
+                try:
+                    thumbnail_path.unlink()
+                    logger.debug("Deleted thumbnail: %s", thumbnail_path)
+                except OSError as e:
+                    logger.warning("Failed to delete thumbnail %s: %s", thumbnail_path, e)
+
+        return upload_results, deleted
 
     def get_uploader_status(self) -> dict[str, bool]:
         """Get status of all registered uploaders.

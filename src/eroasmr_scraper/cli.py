@@ -734,6 +734,18 @@ def pipeline(
         bool,
         typer.Option("--keep", "-k", help="Keep local files after upload"),
     ] = False,
+    parallel_mode: Annotated[
+        bool,
+        typer.Option("--parallel", "-p", help="Use parallel upload mode (prevents disk filling)"),
+    ] = True,
+    min_free_space: Annotated[
+        float,
+        typer.Option("--min-free-space", help="Minimum free space in GB before pausing downloads"),
+    ] = 5.0,
+    max_pending: Annotated[
+        int,
+        typer.Option("--max-pending", help="Maximum files waiting for upload before pausing downloads"),
+    ] = 3,
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Enable debug logging"),
@@ -744,11 +756,15 @@ def pipeline(
     Downloads videos and uploads them to all configured platforms.
     By default, deletes local files after successful uploads.
 
+    Uses parallel upload mode by default to prevent disk filling.
+    Use --no-parallel for sequential mode (slower but simpler).
+
     Examples:
-        eroasmr-scraper pipeline                    # Process all pending
+        eroasmr-scraper pipeline                    # Process all pending (parallel mode)
         eroasmr-scraper pipeline --limit 10         # Process first 10
         eroasmr-scraper pipeline --keep             # Keep local files
-        eroasmr-scraper pipeline -o ./videos -n 5   # Custom output, 5 videos
+        eroasmr-scraper pipeline --no-parallel      # Sequential mode
+        eroasmr-scraper pipeline --min-free-space 10  # Keep 10GB free
     """
     setup_logging(verbose)
 
@@ -775,12 +791,17 @@ def pipeline(
         downloader=downloader,
         uploaders=uploaders,
         delete_after_upload=not keep_files,
+        min_free_space_gb=min_free_space,
+        max_pending_files=max_pending,
     )
 
     # Show configuration
     console.print(f"[cyan]Output directory:[/cyan] {output_dir}")
     console.print(f"[cyan]Uploaders:[/cyan] {', '.join(u.storage_type for u in uploaders)}")
     console.print(f"[cyan]Delete after upload:[/cyan] {not keep_files}")
+    console.print(f"[cyan]Mode:[/cyan] {'Parallel' if parallel_mode else 'Sequential'}")
+    console.print(f"[cyan]Min free space:[/cyan] {min_free_space}GB")
+    console.print(f"[cyan]Max pending files:[/cyan] {max_pending}")
     console.print()
 
     # Check uploader status
@@ -791,8 +812,15 @@ def pipeline(
 
     console.print()
 
-    # Run pipeline
-    stats = pipeline_instance.process_all(limit=limit, retry_failed=retry)
+    # Run pipeline in appropriate mode
+    if parallel_mode:
+        stats = pipeline_instance.process_all_parallel(
+            limit=limit,
+            retry_failed=retry,
+            max_workers=settings.pipeline.max_upload_workers,
+        )
+    else:
+        stats = pipeline_instance.process_all(limit=limit, retry_failed=retry)
 
     # Show summary
     console.print()
@@ -802,6 +830,8 @@ def pipeline(
     console.print(f"  Upload partial: {stats['upload_partial']}")
     console.print(f"  Upload failed: {stats['upload_failed']}")
     console.print(f"  Download failed: {stats['download_failed']}")
+    if stats.get("disk_space_paused", 0) > 0:
+        console.print(f"  [yellow]Disk space pauses: {stats['disk_space_paused']}[/yellow]")
 
 
 @app.command()

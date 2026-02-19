@@ -40,6 +40,23 @@ class ScraperConfig(BaseModel):
     reverse: bool = False  # Scrape from last page (oldest) to first (newest)
 
 
+class PipelineConfig(BaseModel):
+    """Pipeline configuration for download/upload."""
+
+    # Disk space management
+    min_free_space_gb: float = Field(default=5.0, description="Minimum free space in GB before pausing downloads")
+    max_disk_usage_percent: float = Field(default=90.0, description="Maximum disk usage percentage before pausing")
+    max_pending_files: int = Field(default=3, description="Maximum files waiting for upload before pausing downloads")
+
+    # Parallel processing
+    max_upload_workers: int = Field(default=2, description="Number of parallel upload threads")
+    use_parallel: bool = Field(default=True, description="Use parallel upload mode")
+
+    # Cleanup
+    delete_after_upload: bool = Field(default=True, description="Delete local files after successful upload")
+    delete_only_if_all_success: bool = Field(default=True, description="Only delete when ALL uploads succeed")
+
+
 class TelegramConfig(BaseModel):
     """Telegram upload configuration."""
 
@@ -98,6 +115,7 @@ class Settings(BaseSettings):
     db: DatabaseConfig = DatabaseConfig()
     scraper: ScraperConfig = ScraperConfig()
     telegram: TelegramConfig = TelegramConfig()
+    pipeline: PipelineConfig = PipelineConfig()
 
     # Logging
     log_level: str = "INFO"
