@@ -40,12 +40,25 @@ class ScraperConfig(BaseModel):
     reverse: bool = False  # Scrape from last page (oldest) to first (newest)
 
 
+class TelegramConfig(BaseModel):
+    """Telegram upload configuration."""
+
+    upload_service_url: str = "http://localhost:8000"
+    tenant_id: str | None = None
+    caption_template: str = "{title}"  # Supported variables: {title}, {slug}, {duration}
+    parse_mode: str = "HTML"
+    # Path mapping for Docker integration: local_path -> container_path
+    # Example: {"data/downloads": "/app/data/downloads"}
+    file_path_map: dict[str, str] = {}
+
+
 class Settings(BaseSettings):
     """Global application settings."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        env_prefix="EROASMR_",
         env_nested_delimiter="__",
         extra="ignore",
     )
@@ -53,6 +66,7 @@ class Settings(BaseSettings):
     http: HttpConfig = HttpConfig()
     db: DatabaseConfig = DatabaseConfig()
     scraper: ScraperConfig = ScraperConfig()
+    telegram: TelegramConfig = TelegramConfig()
 
     # Logging
     log_level: str = "INFO"

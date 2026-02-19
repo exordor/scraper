@@ -24,6 +24,7 @@ from eroasmr_scraper.parallel_pipeline import ParallelPipeline
 from eroasmr_scraper.pipeline import DownloadUploadPipeline
 from eroasmr_scraper.scraper import EroAsmrScraper
 from eroasmr_scraper.storage import VideoStorage
+from eroasmr_scraper.telegram_uploader import TelegramUploader
 from eroasmr_scraper.uploader import MockUploader, Uploader
 
 app = typer.Typer(
@@ -623,20 +624,35 @@ def reset_downloads(
 def _get_uploaders() -> list[Uploader]:
     """Get list of configured uploaders.
 
-    Currently returns MockUploader for testing.
-    To add real uploaders, implement Uploader subclasses and add them here.
+    Returns uploaders based on configuration. If no real uploaders are
+    configured, returns MockUploader for testing.
 
-    Example:
-        uploaders = []
-        if settings.telegram.bot_token:
-            uploaders.append(TelegramUploader(...))
-        if settings.gdrive.credentials_path:
-            uploaders.append(GoogleDriveUploader(...))
-        return uploaders
+    Configure Telegram via environment variables:
+        EROASMR_TELEGRAM__TENANT_ID=your-tenant-id
+        EROASMR_TELEGRAM__UPLOAD_SERVICE_URL=http://localhost:8000
+        EROASMR_TELEGRAM__FILE_PATH_MAP={"data/downloads": "/app/data/downloads"}
     """
-    # For now, return mock uploader for testing
-    # Real uploaders will be added when credentials are configured
-    return [MockUploader()]
+    uploaders_list: list[Uploader] = []
+    storage = VideoStorage()
+
+    # Add Telegram uploader if configured
+    if settings.telegram.tenant_id:
+        telegram = TelegramUploader(
+            upload_service_url=settings.telegram.upload_service_url,
+            tenant_id=settings.telegram.tenant_id,
+            caption_template=settings.telegram.caption_template,
+            parse_mode=settings.telegram.parse_mode,
+            file_path_map=settings.telegram.file_path_map,
+            storage=storage,
+        )
+        if telegram.is_ready():
+            uploaders_list.append(telegram)
+
+    # Add mock uploader if no real uploaders configured
+    if not uploaders_list:
+        uploaders_list.append(MockUploader())
+
+    return uploaders_list
 
 
 @app.command()
@@ -841,9 +857,17 @@ def uploaders() -> None:
         desc = uploader.__class__.__name__
         table.add_row(uploader.storage_type, status, desc)
 
+    # Show Telegram config status if not already in list
+    telegram_in_list = any(u.storage_type == "telegram" for u in uploaders_list)
+    if not telegram_in_list:
+        table.add_row(
+            "telegram",
+            "[yellow]Not Configured[/yellow]",
+            "[dim]Set EROASMR_TELEGRAM__TENANT_ID to enable[/dim]"
+        )
+
     # Add placeholder for future uploaders
     future_uploaders = [
-        ("telegram", "TelegramUploader", "Upload to Telegram channel"),
         ("google_drive", "GoogleDriveUploader", "Upload to Google Drive"),
     ]
 
@@ -852,4 +876,4 @@ def uploaders() -> None:
 
     console.print(table)
     console.print()
-    console.print("[dim]To add uploaders, implement Uploader subclasses in src/eroasmr_scraper/[/dim]")
+    console.print("[dim]Configure uploaders via environment variables (EROASMR_<NAME>__<FIELD>)[/dim]")
