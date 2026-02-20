@@ -1,6 +1,7 @@
 """Video downloader using httpx with direct URL extraction."""
 
 import io
+import json
 import logging
 import random
 import time
@@ -24,6 +25,48 @@ from eroasmr_scraper.parser import parse_video_source
 from eroasmr_scraper.storage import VideoStorage
 
 logger = logging.getLogger(__name__)
+
+# Zhumianwang play parser - lazy import to avoid circular deps
+_zhumianwang_parser = None
+
+
+def _get_zhumianwang_parser():
+    """Lazy load zhumianwang parser."""
+    global _zhumianwang_parser
+    if _zhumianwang_parser is None:
+        from eroasmr_scraper.sites.zhumianwang.play_parser import ZhumianwangPlayParser
+        _zhumianwang_parser = ZhumianwangPlayParser()
+    return _zhumianwang_parser
+
+
+# Cache for zhumianwang cookies
+_zhumianwang_cookies: dict | None = None
+
+
+def _load_zhumianwang_cookies() -> dict | None:
+    """Load zhumianwang cookies from cookies.json file."""
+    global _zhumianwang_cookies
+    if _zhumianwang_cookies is not None:
+        return _zhumianwang_cookies
+
+    cookies_file = Path(__file__).parent.parent.parent.parent / "data" / "cookies.json"
+    if not cookies_file.exists():
+        logger.warning("Zhumianwang cookies file not found: %s", cookies_file)
+        return None
+
+    try:
+        cookies_list = json.loads(cookies_file.read_text())
+        # Convert to dict format for httpx
+        _zhumianwang_cookies = {
+            c["name"]: c["value"]
+            for c in cookies_list
+            if "zhumianwang.com" in c.get("domain", "")
+        }
+        logger.info("Loaded %d zhumianwang cookies", len(_zhumianwang_cookies))
+        return _zhumianwang_cookies
+    except Exception as e:
+        logger.error("Failed to load zhumianwang cookies: %s", e)
+        return None
 
 
 class VideoDownloader:
@@ -112,6 +155,46 @@ class VideoDownloader:
         except httpx.RequestError as e:
             logger.error("Request error fetching video page %s: %s", url, e)
             return None
+
+    def _fetch_zhumianwang_play_page(self, play_url: str) -> tuple[str | None, str | None]:
+        """Fetch zhumianwang play page and extract download URLs.
+
+        Args:
+            play_url: URL to the play page (e.g., /v_play/xxx.html)
+
+        Returns:
+            Tuple of (video_url, audio_url) or (None, None) if failed
+        """
+        cookies = _load_zhumianwang_cookies()
+        if not cookies:
+            return None, None
+
+        # Build full URL if needed
+        if not play_url.startswith("http"):
+            play_url = f"https://zhumianwang.com{play_url}"
+
+        headers = {
+            "User-Agent": settings.http.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "https://zhumianwang.com/",
+        }
+
+        try:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                response = client.get(play_url, cookies=cookies, headers=headers)
+                if response.status_code != 200:
+                    logger.error("Failed to fetch play page: HTTP %d", response.status_code)
+                    return None, None
+
+                # Parse download URLs from play page
+                parser = _get_zhumianwang_parser()
+                result = parser.parse_play_page(response.text)
+                return result.video_download_url, result.audio_download_url
+
+        except Exception as e:
+            logger.error("Error fetching zhumianwang play page: %s", e)
+            return None, None
 
     def _extract_video_url(self, html: str) -> str | None:
         """Extract video source URL from page HTML.
@@ -211,14 +294,22 @@ class VideoDownloader:
 
             # Get download URLs based on site
             if site_id == "zhumianwang":
-                # Use pre-scraped URLs from database
-                video_url = video.get("download_url")
-                audio_url = video.get("audio_download_url")
-
-                if not video_url:
-                    error_msg = "No download_url in database for zhumianwang video"
+                # Fetch play page with cookies to get download URLs
+                play_url = video.get("play_url")
+                if not play_url:
+                    error_msg = "No play_url in database for zhumianwang video"
                     self.storage.mark_failed(slug, error_msg)
                     return False, error_msg
+
+                logger.info("Fetching zhumianwang play page: %s", play_url)
+                video_url, audio_url = self._fetch_zhumianwang_play_page(play_url)
+
+                if not video_url:
+                    error_msg = "Failed to extract download URL from play page"
+                    self.storage.mark_failed(slug, error_msg)
+                    return False, error_msg
+
+                logger.debug("Extracted video URL: %s", video_url[:80] if video_url else None)
             else:
                 # eroasmr: Fetch video page and extract URL
                 logger.info("Fetching video page: %s", slug)
