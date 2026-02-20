@@ -19,6 +19,18 @@ app = FastAPI(
 )
 
 
+class ScrapeProgress(BaseModel):
+    """Scraping progress information."""
+
+    mode: str = ""
+    phase: str = ""
+    last_page: int = 0
+    total_pages: int | None = None
+    last_video_id: int = 0
+    site_id: str = ""
+    last_updated: str = ""
+
+
 class DashboardStats(BaseModel):
     """Dashboard statistics."""
 
@@ -39,6 +51,15 @@ class DashboardStats(BaseModel):
     disk_used_gb: float
     disk_free_gb: float
     disk_free_percent: float
+
+    # Scraping progress
+    scrape_progress: ScrapeProgress | None = None
+
+    # Site stats
+    site_stats: dict = {}
+
+    # Pending files
+    pending_files: int = 0
 
     # Recent activity
     recent_downloads: list[dict]
@@ -69,6 +90,58 @@ def get_disk_info() -> dict:
         "disk_free_gb": round(free / (1024**3), 1),
         "disk_free_percent": round(free / total * 100, 1),
     }
+
+
+def get_scrape_progress(conn) -> ScrapeProgress | None:
+    """Get scraping progress from database."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT mode, phase, last_page, total_pages, last_video_id, site_id, last_updated
+            FROM scrape_progress
+            ORDER BY last_updated DESC
+            LIMIT 1
+        """)
+        row = cursor.fetchone()
+        if row:
+            return ScrapeProgress(
+                mode=row[0] or "",
+                phase=row[1] or "",
+                last_page=row[2] or 0,
+                total_pages=row[3],
+                last_video_id=row[4] or 0,
+                site_id=row[5] or "",
+                last_updated=row[6] or "",
+            )
+    except Exception:
+        pass
+    return None
+
+
+def get_site_stats(conn) -> dict:
+    """Get statistics per site."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT site_id, COUNT(*) as count
+            FROM videos
+            WHERE site_id IS NOT NULL
+            GROUP BY site_id
+        """)
+        return {row[0]: row[1] for row in cursor.fetchall()}
+    except Exception:
+        return {}
+
+
+def count_pending_files() -> int:
+    """Count files waiting to be uploaded."""
+    try:
+        download_dir = Path("data/downloads")
+        if download_dir.exists():
+            return len(list(download_dir.glob("*.mp4"))) + len(list(download_dir.glob("*.mp3")))
+    except Exception:
+        pass
+    return 0
 
 
 @app.get("/api/stats", response_model=DashboardStats)
@@ -170,6 +243,9 @@ async def get_stats():
         ]
 
         disk_info = get_disk_info()
+        scrape_progress = get_scrape_progress(conn)
+        site_stats = get_site_stats(conn)
+        pending_files = count_pending_files()
 
         return DashboardStats(
             total_videos=total_videos,
@@ -180,6 +256,9 @@ async def get_stats():
             not_started=not_started,
             telegram_uploads=telegram_uploads,
             mock_uploads=mock_uploads,
+            scrape_progress=scrape_progress,
+            site_stats=site_stats,
+            pending_files=pending_files,
             last_updated=datetime.now().isoformat(),
             recent_downloads=recent_downloads,
             recent_uploads=recent_uploads,
@@ -413,6 +492,33 @@ async def dashboard():
         </header>
 
         <div class="grid">
+            <!-- Scraping Progress -->
+            <div class="card" id="scrapeCard" style="display: none;">
+                <h2>Scraping Progress</h2>
+                <div class="stats-grid">
+                    <div class="mini-stat">
+                        <div class="mini-stat-value" id="scrapeMode">-</div>
+                        <div class="mini-stat-label">Mode</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value status-downloading" id="scrapePhase">-</div>
+                        <div class="mini-stat-label">Phase</div>
+                    </div>
+                    <div class="mini-stat">
+                        <div class="mini-stat-value" id="scrapeSite">-</div>
+                        <div class="mini-stat-label">Site</div>
+                    </div>
+                </div>
+                <div style="margin-top: 15px;">
+                    <div class="stat-label">Page Progress</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="scrapeProgress" style="width: 0%; background: linear-gradient(90deg, #9b59b6, #3498db);"></div>
+                    </div>
+                    <div class="progress-text"><span id="scrapePage">0</span> / <span id="scrapeTotalPages">?</span> pages</div>
+                </div>
+                <div class="stat-label" style="margin-top: 10px;">Last updated: <span id="scrapeUpdated">-</span></div>
+            </div>
+
             <!-- Download Progress -->
             <div class="card">
                 <h2>Download Progress</h2>
@@ -457,6 +563,20 @@ async def dashboard():
                     <div class="progress-fill" id="diskProgress" style="width: 0%; background: linear-gradient(90deg, #00ff88, #ffa502);"></div>
                 </div>
                 <div class="progress-text"><span id="diskUsed">-</span> GB used of <span id="diskTotal">-</span> GB</div>
+                <div class="stats-grid" style="margin-top: 15px;">
+                    <div class="mini-stat">
+                        <div class="mini-stat-value status-pending" id="pendingFiles">-</div>
+                        <div class="mini-stat-label">Pending Files</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Site Stats -->
+        <div class="card" style="margin-bottom: 30px;">
+            <h2>Site Statistics</h2>
+            <div class="stats-grid" id="siteStatsGrid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+                <div class="mini-stat">Loading...</div>
             </div>
         </div>
 
@@ -537,6 +657,43 @@ async def dashboard():
                 document.getElementById('diskUsed').textContent = data.disk_used_gb;
                 document.getElementById('diskTotal').textContent = data.disk_total_gb;
                 document.getElementById('diskProgress').style.width = (100 - data.disk_free_percent) + '%';
+
+                // Pending files
+                document.getElementById('pendingFiles').textContent = data.pending_files;
+
+                // Scraping progress
+                if (data.scrape_progress) {
+                    document.getElementById('scrapeCard').style.display = 'block';
+                    document.getElementById('scrapeMode').textContent = data.scrape_progress.mode || '-';
+                    document.getElementById('scrapePhase').textContent = data.scrape_progress.phase || '-';
+                    document.getElementById('scrapeSite').textContent = data.scrape_progress.site_id || '-';
+                    document.getElementById('scrapePage').textContent = data.scrape_progress.last_page || 0;
+                    document.getElementById('scrapeTotalPages').textContent = data.scrape_progress.total_pages || '?';
+                    document.getElementById('scrapeUpdated').textContent = formatTime(data.scrape_progress.last_updated);
+
+                    // Calculate scrape progress percentage
+                    if (data.scrape_progress.total_pages && data.scrape_progress.total_pages > 0) {
+                        const scrapePct = (data.scrape_progress.last_page / data.scrape_progress.total_pages * 100);
+                        document.getElementById('scrapeProgress').style.width = scrapePct + '%';
+                    } else {
+                        document.getElementById('scrapeProgress').style.width = '0%';
+                    }
+                } else {
+                    document.getElementById('scrapeCard').style.display = 'none';
+                }
+
+                // Site stats
+                if (data.site_stats && Object.keys(data.site_stats).length > 0) {
+                    const siteHtml = Object.entries(data.site_stats).map(([site, count]) => `
+                        <div class="mini-stat">
+                            <div class="mini-stat-value">${count}</div>
+                            <div class="mini-stat-label">${site}</div>
+                        </div>
+                    `).join('');
+                    document.getElementById('siteStatsGrid').innerHTML = siteHtml;
+                } else {
+                    document.getElementById('siteStatsGrid').innerHTML = '<div class="mini-stat"><div class="mini-stat-value">-</div><div class="mini-stat-label">No data</div></div>';
+                }
 
                 // Last updated
                 document.getElementById('lastUpdated').textContent = 'Updated: ' + formatTime(data.last_updated);
