@@ -746,6 +746,7 @@ def pipeline(
         int,
         typer.Option("--max-pending", help="Maximum files waiting for upload before pausing downloads"),
     ] = 3,
+    site: SiteChoice = "eroasmr",  # type: ignore
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Enable debug logging"),
@@ -765,13 +766,14 @@ def pipeline(
         eroasmr-scraper pipeline --keep             # Keep local files
         eroasmr-scraper pipeline --no-parallel      # Sequential mode
         eroasmr-scraper pipeline --min-free-space 10  # Keep 10GB free
+        eroasmr-scraper pipeline --site zhumianwang # Process zhumianwang videos
     """
     setup_logging(verbose)
 
     output_dir = output or Path("data/downloads")
     archive_file = Path("data/download_archive.txt")
 
-    storage = VideoStorage()
+    storage = VideoStorage(site_id=site)
     downloader = VideoDownloader(
         storage=storage,
         output_dir=output_dir,
@@ -860,6 +862,7 @@ def parallel(
         int,
         typer.Option("--upload-workers", "-w", help="Number of concurrent upload workers"),
     ] = 3,
+    site: SiteChoice = "eroasmr",  # type: ignore
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Enable debug logging"),
@@ -880,13 +883,14 @@ def parallel(
         eroasmr-scraper parallel --keep             # Keep local files
         eroasmr-scraper parallel --queue-size 20    # Larger download buffer
         eroasmr-scraper parallel --upload-workers 5 # 5 concurrent uploads
+        eroasmr-scraper parallel --site zhumianwang # Process zhumianwang videos
     """
     setup_logging(verbose)
 
     output_dir = output or Path("data/downloads")
     archive_file = Path("data/download_archive.txt")
 
-    storage = VideoStorage()
+    storage = VideoStorage(site_id=site)
     downloader = VideoDownloader(
         storage=storage,
         output_dir=output_dir,

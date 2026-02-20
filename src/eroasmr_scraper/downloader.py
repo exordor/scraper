@@ -49,9 +49,24 @@ def _load_zhumianwang_cookies() -> dict | None:
     if _zhumianwang_cookies is not None:
         return _zhumianwang_cookies
 
-    cookies_file = Path(__file__).parent.parent.parent.parent / "data" / "cookies.json"
-    if not cookies_file.exists():
-        logger.warning("Zhumianwang cookies file not found: %s", cookies_file)
+    # Try multiple possible locations for cookies.json
+    possible_paths = [
+        # Project root relative to this file (src/eroasmr_scraper/downloader.py)
+        Path(__file__).parent.parent.parent.parent / "data" / "cookies.json",
+        # Current working directory
+        Path.cwd() / "data" / "cookies.json",
+        # Direct path
+        Path("/root/eroasmr-scraper/data/cookies.json"),
+    ]
+
+    cookies_file = None
+    for path in possible_paths:
+        if path.exists():
+            cookies_file = path
+            break
+
+    if not cookies_file:
+        logger.warning("Zhumianwang cookies file not found in: %s", [str(p) for p in possible_paths])
         return None
 
     try:
