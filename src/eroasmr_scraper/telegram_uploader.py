@@ -96,27 +96,41 @@ class TelegramUploader(Uploader):
         """Generate caption from video metadata.
 
         Args:
-            slug: Video slug
+            slug: Video slug (may have _audio suffix for audio files)
 
         Returns:
             Formatted caption string
         """
         caption = self.caption_template
 
-        # Always replace slug
+        # Always replace slug (use original slug for display)
         caption = caption.replace("{slug}", slug)
 
+        # Default replacements in case metadata lookup fails
+        title = slug
+        duration = ""
+        description = ""
+
+        # For audio files, strip _audio suffix to get video slug
+        video_slug = slug.replace("_audio", "")
+
         if self.storage:
-            video = self.storage.get_video_by_slug(slug)
-            if video:
-                caption = caption.replace("{title}", video.get("title", slug))
-                caption = caption.replace("{duration}", video.get("duration") or "")
-                # Handle description - use excerpt if description is empty
-                description = video.get("description") or video.get("excerpt") or ""
-                # Truncate description if too long (Telegram limit is 1024 chars for captions)
-                if len(description) > 800:
-                    description = description[:797] + "..."
-                caption = caption.replace("{description}", description)
+            try:
+                video = self.storage.get_video_by_slug(video_slug)
+                if video:
+                    title = video.get("title", video_slug)
+                    duration = video.get("duration") or ""
+                    # Handle description - use excerpt if description is empty
+                    description = video.get("description") or video.get("excerpt") or ""
+                    # Truncate description if too long (Telegram limit is 1024 chars for captions)
+                    if len(description) > 800:
+                        description = description[:797] + "..."
+            except Exception as e:
+                logger.warning("Failed to get video metadata for caption: %s", e)
+
+        caption = caption.replace("{title}", title)
+        caption = caption.replace("{duration}", duration)
+        caption = caption.replace("{description}", description)
 
         return caption
 

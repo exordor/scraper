@@ -682,19 +682,22 @@ def reset_downloads(
     console.print("[green]Reset complete![/green] Run 'download' or 'pipeline' to start downloading.")
 
 
-def _get_uploaders() -> list[Uploader]:
+def _get_uploaders(site_id: str = "eroasmr") -> list[Uploader]:
     """Get list of configured uploaders.
 
     Returns uploaders based on configuration. If no real uploaders are
     configured, returns MockUploader for testing.
 
+    Args:
+        site_id: Site identifier for video metadata lookup
+
     Configure Telegram via environment variables:
-        EROASMR_TELEGRAM__TENANT_ID=your-tenant-id
-        EROASMR_TELEGRAM__UPLOAD_SERVICE_URL=http://localhost:8000
-        EROASMR_TELEGRAM__FILE_PATH_MAP={"data/downloads": "/app/data/downloads"}
+        SCRAPER_TELEGRAM__TENANT_ID=your-tenant-id
+        SCRAPER_TELEGRAM__UPLOAD_SERVICE_URL=http://localhost:8000
+        SCRAPER_TELEGRAM__FILE_PATH_MAP={"data/downloads": "/app/data/downloads"}
     """
     uploaders_list: list[Uploader] = []
-    storage = VideoStorage()
+    storage = VideoStorage(site_id=site_id)
 
     # Add Telegram uploader if configured
     if settings.telegram.tenant_id:
@@ -781,7 +784,7 @@ def pipeline(
     )
 
     # Get configured uploaders
-    uploaders = _get_uploaders()
+    uploaders = _get_uploaders(site_id=site)
 
     if not uploaders:
         console.print("[yellow]No uploaders configured. Using mock uploader for testing.[/yellow]")
@@ -898,7 +901,7 @@ def parallel(
     )
 
     # Get configured uploaders
-    uploaders_list = _get_uploaders()
+    uploaders_list = _get_uploaders(site_id=site)
 
     if not uploaders_list:
         console.print("[yellow]No uploaders configured. Using mock uploader for testing.[/yellow]")

@@ -26,6 +26,9 @@ from eroasmr_scraper.storage import VideoStorage
 
 logger = logging.getLogger(__name__)
 
+# Proxy configuration for zhumianwang CDN (Hong Kong server)
+ZHUMIANWANG_PROXY = "http://202.155.141.121:3128"
+
 # Zhumianwang play parser - lazy import to avoid circular deps
 _zhumianwang_parser = None
 
@@ -228,6 +231,7 @@ class VideoDownloader:
         url: str,
         output_path: Path,
         task_id: int | None = None,
+        use_proxy: bool = False,
     ) -> tuple[bool, str | None]:
         """Download file with progress support.
 
@@ -236,13 +240,24 @@ class VideoDownloader:
             url: File URL
             output_path: Output file path
             task_id: Rich progress task ID (optional)
+            use_proxy: If True, use zhumianwang proxy for CDN access
 
         Returns:
             Tuple of (success, error_message)
         """
         try:
+            # Use proxy client for zhumianwang CDN URLs
+            download_client = client
+            if use_proxy and "video.zklhy.com" in url:
+                download_client = httpx.Client(
+                    proxy=ZHUMIANWANG_PROXY,
+                    timeout=httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0),
+                    follow_redirects=True,
+                )
+                logger.info("Using HK proxy for zhumianwang CDN: %s", url[:60])
+
             # Use stream for large files
-            with client.stream("GET", url) as response:
+            with download_client.stream("GET", url) as response:
                 response.raise_for_status()
 
                 # Get file size
@@ -347,8 +362,11 @@ class VideoDownloader:
             # Download video file
             output_path = self.output_dir / f"{slug}.mp4"
 
+            # Use proxy for zhumianwang CDN
+            use_proxy = site_id == "zhumianwang"
+
             logger.info("Downloading video: %s", slug)
-            success, error = self._download_file(client, video_url, output_path, task_id)
+            success, error = self._download_file(client, video_url, output_path, task_id, use_proxy=use_proxy)
 
             if not success:
                 self.storage.mark_failed(slug, error)
@@ -362,7 +380,7 @@ class VideoDownloader:
             if include_audio and audio_url and site_id == "zhumianwang":
                 audio_path = self.output_dir / f"{slug}.mp3"
                 logger.info("Downloading audio: %s", slug)
-                audio_success, audio_error = self._download_file(client, audio_url, audio_path, task_id)
+                audio_success, audio_error = self._download_file(client, audio_url, audio_path, task_id, use_proxy=True)
 
                 if not audio_success:
                     logger.warning("Failed to download audio for %s: %s", slug, audio_error)
@@ -418,7 +436,7 @@ class VideoDownloader:
 
         with self._get_client() as client:
             logger.info("Downloading audio: %s", slug)
-            success, error = self._download_file(client, audio_url, output_path, task_id)
+            success, error = self._download_file(client, audio_url, output_path, task_id, use_proxy=True)
 
             if not success:
                 if output_path.exists():

@@ -32,6 +32,7 @@ class DownloadTask:
     file_path: Path
     file_size: int
     thumbnail_path: Path | None = None
+    audio_path: Path | None = None  # For zhumianwang audio
     error: str | None = None
 
 
@@ -41,6 +42,9 @@ class UploadTask:
 
     slug: str
     file_path: Path
+    uploader: Uploader
+    thumbnail_path: Path | None = None
+    site_id: str = "eroasmr"  # Default site_id
     uploader: Uploader
     thumbnail_path: Path | None = None
 
@@ -226,17 +230,26 @@ class ParallelPipeline:
                 completed=i,
             )
 
+            # Check if this is zhumianwang for audio download
+            video = self.storage.get_video_by_slug(slug)
+            site_id = video.get("site_id", "eroasmr") if video else "eroasmr"
+            include_audio = site_id == "zhumianwang"
+
             # Run download in thread pool (sync function)
             loop = asyncio.get_event_loop()
             success, error = await loop.run_in_executor(
                 None,
-                self.downloader.download_video,
-                slug,
+                lambda s=slug, ia=include_audio: self.downloader.download_video(s, include_audio=ia),
             )
 
             if success:
                 file_path = self.downloader.output_dir / f"{slug}.mp4"
                 file_size = file_path.stat().st_size if file_path.exists() else 0
+
+                # Check for audio file (zhumianwang)
+                audio_path = self.downloader.output_dir / f"{slug}.mp3"
+                if not audio_path.exists():
+                    audio_path = None
 
                 # Also download thumbnail
                 thumbnail_path = await loop.run_in_executor(
@@ -250,14 +263,16 @@ class ParallelPipeline:
                     file_path=file_path,
                     file_size=file_size,
                     thumbnail_path=thumbnail_path,
+                    audio_path=audio_path,
                 )
 
                 await self.download_queue.put(task)
                 self.stats.downloaded += 1
 
+                audio_info = " + audio" if audio_path else ""
                 progress.update(
                     task_id,
-                    description=f"[green]✓ DL: {slug[:30]}[/green]",
+                    description=f"[green]✓ DL: {slug[:30]}{audio_info}[/green]",
                 )
             else:
                 self.stats.download_failed += 1
@@ -292,15 +307,32 @@ class ParallelPipeline:
             if task.error:
                 continue
 
-            # Create upload task for each uploader
+            # Get site_id from video record
+            video = self.storage.get_video_by_slug(task.slug)
+            site_id = video.get("site_id", "eroasmr") if video else "eroasmr"
+
+            # Create upload task for video file
             for uploader in self.uploaders:
                 upload_task = UploadTask(
                     slug=task.slug,
                     file_path=task.file_path,
                     uploader=uploader,
                     thumbnail_path=task.thumbnail_path,
+                    site_id=site_id,
                 )
                 await self.upload_queue.put(upload_task)
+
+            # Create upload task for audio file if present (zhumianwang)
+            if task.audio_path and task.audio_path.exists():
+                for uploader in self.uploaders:
+                    audio_task = UploadTask(
+                        slug=f"{task.slug}_audio",
+                        file_path=task.audio_path,
+                        uploader=uploader,
+                        thumbnail_path=None,  # No thumbnail for audio
+                        site_id=site_id,
+                    )
+                    await self.upload_queue.put(audio_task)
 
     async def _upload_consumer(
         self,
@@ -354,6 +386,7 @@ class ParallelPipeline:
                     # Record to storage_locations
                     location = StorageLocation(
                         slug=task.slug,
+                        site_id=task.site_id,
                         storage_type=uploader.storage_type,
                         location_id=result.location_id or "",
                         location_url=result.location_url,
