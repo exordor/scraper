@@ -621,7 +621,7 @@ def reset_downloads(
     console.print("[green]Reset complete![/green] Run 'download' or 'pipeline' to start downloading.")
 
 
-def _get_uploaders() -> list[Uploader]:
+def _get_uploaders(site_id: str = "eroasmr") -> list[Uploader]:
     """Get list of configured uploaders.
 
     Returns uploaders based on configuration. If no real uploaders are
@@ -633,7 +633,7 @@ def _get_uploaders() -> list[Uploader]:
         EROASMR_TELEGRAM__FILE_PATH_MAP={"data/downloads": "/app/data/downloads"}
     """
     uploaders_list: list[Uploader] = []
-    storage = VideoStorage()
+    storage = VideoStorage(site_id=site_id)
 
     # Add Telegram uploader if configured
     if settings.telegram.tenant_id:
@@ -745,6 +745,10 @@ def pipeline(
 
 @app.command()
 def parallel(
+    site: Annotated[
+        str,
+        typer.Option("--site", "-s", help="Site to process (eroasmr, zhumianwang)"),
+    ] = "zhumianwang",
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Output directory for videos"),
@@ -793,6 +797,7 @@ def parallel(
 
     Examples:
         python main.py parallel                    # Process all pending
+        python main.py parallel --site zhumianwang # Process zhumianwang
         python main.py parallel --limit 100        # Process 100 videos
         python main.py parallel --keep             # Keep local files
         python main.py parallel --queue-size 20    # Larger download buffer
@@ -803,7 +808,7 @@ def parallel(
     output_dir = output or Path("data/downloads")
     archive_file = Path("data/download_archive.txt")
 
-    storage = VideoStorage()
+    storage = VideoStorage(site_id=site)
     downloader = VideoDownloader(
         storage=storage,
         output_dir=output_dir,
@@ -811,7 +816,7 @@ def parallel(
     )
 
     # Get configured uploaders
-    uploaders_list = _get_uploaders()
+    uploaders_list = _get_uploaders(site_id=site)
 
     if not uploaders_list:
         console.print("[yellow]No uploaders configured. Using mock uploader for testing.[/yellow]")

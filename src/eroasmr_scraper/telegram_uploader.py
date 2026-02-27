@@ -123,7 +123,8 @@ class TelegramUploader(Uploader):
             try:
                 video = self.storage.get_video_by_slug(video_slug)
                 if video:
-                    title = video.get("title", video_slug)
+                    # Use .get() with or "" to handle both missing keys and None values
+                    title = video.get("title") or video_slug
                     duration = video.get("duration") or ""
                     # Handle description - use excerpt if description is empty
                     description = video.get("description") or video.get("excerpt") or ""
@@ -133,9 +134,10 @@ class TelegramUploader(Uploader):
             except Exception as e:
                 logger.warning("Failed to get video metadata for caption: %s", e)
 
-        caption = caption.replace("{title}", title)
-        caption = caption.replace("{duration}", duration)
-        caption = caption.replace("{description}", description)
+        # Ensure all replacements are strings (never None)
+        caption = caption.replace("{title}", str(title or ""))
+        caption = caption.replace("{duration}", str(duration or ""))
+        caption = caption.replace("{description}", str(description or ""))
 
         return caption
 
