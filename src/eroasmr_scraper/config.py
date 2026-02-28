@@ -61,7 +61,8 @@ class TelegramConfig(BaseModel):
     """Telegram upload configuration."""
 
     upload_service_url: str = "http://localhost:8000"
-    tenant_id: str | None = None
+    tenant_id: str | None = None  # Legacy: single tenant ID
+    tenant_ids: list[str] = []  # Multiple tenant IDs for round-robin load balancing
     caption_template: str = "<b>{title}</b>\n\n{description}\n\nDuration: {duration}"  # Variables: {title}, {slug}, {description}, {duration}
     parse_mode: str = "HTML"
     # Path mapping for Docker integration: local_path -> container_path
@@ -81,11 +82,11 @@ class ZhumianwangSiteConfig(BaseModel):
     """Zhumianwang site-specific configuration."""
 
     enabled: bool = True
-    base_url: str = "https://zhumianwang.com"
-    http: HttpConfig = HttpConfig(base_url="https://zhumianwang.com")
+    base_url: str = "https://www.zhumianzhan.com"
+    http: HttpConfig = HttpConfig(base_url="https://www.zhumianzhan.com")
     # Playwright authentication for download links
     requires_auth: bool = True
-    cookie_domain: str = ".zhumianwang.com"
+    cookie_domain: str = ".www.zhumianzhan.com"
 
 
 class SitesConfig(BaseModel):

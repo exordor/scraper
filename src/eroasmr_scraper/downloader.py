@@ -78,7 +78,7 @@ def _load_zhumianwang_cookies() -> dict | None:
         _zhumianwang_cookies = {
             c["name"]: c["value"]
             for c in cookies_list
-            if "zhumianwang.com" in c.get("domain", "")
+            if "zhumian" in c.get("domain", "")
         }
         logger.info("Loaded %d zhumianwang cookies", len(_zhumianwang_cookies))
         return _zhumianwang_cookies
@@ -189,13 +189,13 @@ class VideoDownloader:
 
         # Build full URL if needed
         if not play_url.startswith("http"):
-            play_url = f"https://zhumianwang.com{play_url}"
+            play_url = f"https://www.zhumianzhan.com{play_url}"
 
         headers = {
             "User-Agent": settings.http.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Referer": "https://zhumianwang.com/",
+            "Referer": "https://www.zhumianzhan.com/",
         }
 
         try:

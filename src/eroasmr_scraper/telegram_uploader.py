@@ -4,6 +4,7 @@ import logging
 import subprocess
 import os
 from pathlib import Path
+import threading
 
 import httpx
 
@@ -20,10 +21,15 @@ MAX_FILE_SIZE = 1900 * 1024 * 1024
 class TelegramUploader(Uploader):
     """Upload videos to Telegram via the Upload Service API."""
 
+    # Class-level counter for round-robin across all instances
+    _tenant_counter = 0
+    _tenant_lock = threading.Lock()
+
     def __init__(
         self,
         upload_service_url: str | None = None,
         tenant_id: str | None = None,
+        tenant_ids: list[str] | None = None,
         caption_template: str | None = None,
         parse_mode: str | None = None,
         file_path_map: dict[str, str] | None = None,
@@ -33,18 +39,46 @@ class TelegramUploader(Uploader):
 
         Args:
             upload_service_url: URL of the Telegram Upload Service
-            tenant_id: Tenant ID for the upload service
+            tenant_id: Tenant ID for the upload service (legacy, single tenant)
+            tenant_ids: List of tenant IDs for round-robin load balancing
             caption_template: Template for video caption with {title}, {slug}, {duration}
             parse_mode: Parse mode for caption (HTML, Markdown, or None)
             file_path_map: Mapping from local paths to container paths for Docker integration
             storage: VideoStorage instance for getting video metadata
         """
         self.upload_service_url = upload_service_url or settings.telegram.upload_service_url
-        self.tenant_id = tenant_id or settings.telegram.tenant_id
+
+        # Support multiple tenant IDs for round-robin
+        if tenant_ids:
+            self.tenant_ids = tenant_ids
+        elif settings.telegram.tenant_ids:
+            self.tenant_ids = settings.telegram.tenant_ids
+        else:
+            # Fallback to single tenant_id
+            single_tenant = tenant_id or settings.telegram.tenant_id
+            self.tenant_ids = [single_tenant] if single_tenant else []
+
+        # Keep tenant_id for backward compatibility (uses first tenant)
+        self.tenant_id = self.tenant_ids[0] if self.tenant_ids else None
+
         self.caption_template = caption_template or settings.telegram.caption_template
         self.parse_mode = parse_mode or settings.telegram.parse_mode
         self.file_path_map = file_path_map if file_path_map is not None else settings.telegram.file_path_map
         self.storage = storage
+
+    def _get_next_tenant_id(self) -> str | None:
+        """Get next tenant ID using round-robin selection.
+
+        Returns:
+            Next tenant ID in rotation, or None if no tenants configured
+        """
+        if not self.tenant_ids:
+            return None
+
+        with TelegramUploader._tenant_lock:
+            tenant_id = self.tenant_ids[TelegramUploader._tenant_counter % len(self.tenant_ids)]
+            TelegramUploader._tenant_counter += 1
+            return tenant_id
 
     @property
     def storage_type(self) -> str:
@@ -53,7 +87,7 @@ class TelegramUploader(Uploader):
 
     def is_ready(self) -> bool:
         """Check if Telegram uploader is configured."""
-        return bool(self.tenant_id and self.upload_service_url)
+        return bool(self.tenant_ids and self.upload_service_url)
 
     def _map_file_path(self, file_path: Path) -> str:
         """Map local file path to container path if configured.
@@ -257,8 +291,10 @@ class TelegramUploader(Uploader):
             remote_thumbnail_path = self._map_file_path(thumbnail_path)
 
         # Build payload with all available metadata
+        # Use round-robin tenant selection for load balancing
+        tenant_id = self._get_next_tenant_id()
         payload = {
-            "tenant_id": self.tenant_id,
+            "tenant_id": tenant_id,
             "file_path": remote_file_path,
             "caption": caption,
             "parse_mode": self.parse_mode,

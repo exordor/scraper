@@ -20,7 +20,7 @@ class ZhumianwangParser(BaseSiteParser):
     """Parser for zhumianwang.com."""
 
     site_id = "zhumianwang"
-    base_url = "https://zhumianwang.com"
+    base_url = "https://www.zhumianzhan.com"
 
     def parse_list_page(self, html: str) -> ListPageResult:
         """Parse video list from list page HTML.
