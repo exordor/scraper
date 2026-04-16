@@ -1,4 +1,4 @@
-# eroasmr-scraper
+# scraper
 
 Multi-site video metadata scraper with download and upload pipeline support.
 
